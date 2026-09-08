@@ -1,0 +1,40 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Entornos virtuales ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Credenciales / secretos ---
+.env
+*.key
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Datos (opcional: descomenta si no versionas los datos) ---
+# data/raw/
+# data/interim/
+# data/processed/
+
+# --- VS Code / IDE ---
+.vscode/
+.idea/
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db
+
+# --- MLflow (estado generado; el registry/tracking no se versiona en Git) ---
+mlflow.db
+mlruns/
+notebooks/mlflow.db
+notebooks/mlruns/
+
+# --- Backups temporales ---
+*.bak_mlflow
