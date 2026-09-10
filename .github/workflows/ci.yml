@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      MLFLOW_TRACKING_URI: sqlite:////tmp/mlflow.db
     steps:
       - name: Descargar el codigo
         uses: actions/checkout@v4
