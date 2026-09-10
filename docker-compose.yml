@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .                       # construye tu Dockerfile
+    image: spotpriceiq-api
+    ports:
+      - "8001:8000"                # host:contenedor
+    restart: unless-stopped
+
+  mlflow:
+    image: spotpriceiq-api         # reutiliza la MISMA imagen (ya trae mlflow instalado)
+    user: root
+    working_dir: /app
+    volumes:
+      - ./mlflow.db:/app/mlflow.db # monta tu BD para que vea tus experimentos
+    ports:
+      - "5000:5000"
+    command: mlflow server --backend-store-uri sqlite:///mlflow.db --host 0.0.0.0 --port 5000

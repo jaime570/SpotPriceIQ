@@ -1,0 +1,22 @@
+artifact_path: file:///c:/Users/jaime/Desktop/Jaime_LLorca/proyectos/prediccion-electrica/notebooks/mlruns/1/models/m-dfd7b83a3f6943fb9528441867ca7dd6/artifacts
+flavors:
+  python_function:
+    data: model.ubj
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.11.5
+  xgboost:
+    code: null
+    data: model.ubj
+    model_class: xgboost.sklearn.XGBRegressor
+    model_format: ubj
+    xgb_version: 3.2.0
+mlflow_version: 3.14.0
+model_id: m-dfd7b83a3f6943fb9528441867ca7dd6
+model_size_bytes: 1814065
+model_uuid: m-dfd7b83a3f6943fb9528441867ca7dd6
+prompts: null
+run_id: 46af1b3e4c7749d28bb8dc3ca1a7b437
+utc_time_created: '2026-09-08 16:32:18.783354'

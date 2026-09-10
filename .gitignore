@@ -38,3 +38,15 @@ notebooks/mlruns/
 
 # --- Backups temporales ---
 *.bak_mlflow
+
+# --- Datos (no van a Git; raw/interim regenerables, processed lo lleva DVC) ---
+data/raw/
+data/interim/
+data/processed/*.parquet
+
+# --- Carpeta de outputs del asistente ---
+Claude outputs/
+
+# --- Backups de notebooks ---
+*.bak
+*.bak2

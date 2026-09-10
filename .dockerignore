@@ -1,0 +1,13 @@
+notebooks/
+data/
+reports/
+mlruns/
+mlflow.db
+.git/
+.dvc/
+.venv/
+__pycache__/
+.pytest_cache/
+*.ipynb
+.env
+tests/
