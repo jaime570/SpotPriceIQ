@@ -1,0 +1,4 @@
+[core]
+    remote = dvc-spotprice
+['remote "dvc-spotprice"']
+    url = C:\Users\jaime\Desktop\Jaime_LLorca\proyectos\dvc-storage

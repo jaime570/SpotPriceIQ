@@ -18,7 +18,7 @@ Todas públicas y gratuitas:
 | Silver | `data/interim/` | Integrado y estructurado, pendiente de limpieza. |
 | Gold (*warehouse*) | `data/processed/` | Tabla limpia, tipada y **validada**, lista para modelar. |
 
-Los datos **no se versionan**: se regeneran ejecutando el pipeline. Lo que se versiona es el código que los produce.
+**Versionado**: el *código* se versiona en git; el *dataset de modelado* (`tabla_features.parquet`) se versiona con **DVC** para reproducir con qué datos exactos se entrenó cada modelo (ver [Versionado de datos](#versionado-de-datos-dvc)); los *datos crudos* no se versionan, se regeneran ejecutando el pipeline.
 
 ## Pipeline
 
@@ -43,36 +43,65 @@ Los datos **no se versionan**: se regeneran ejecutando el pipeline. Lo que se ve
 
 ```
 prediccion-electrica/
-├── data/                      raw / interim / processed  (no versionado)
-├── notebooks/                 exploración e iteración
-│   ├── 01_ingesta_aemet.ipynb
-│   ├── 01_ingesta_esios.ipynb
-│   ├── 01_ingesta_omie.ipynb
-│   ├── 02_concatenacion.ipynb
-│   └── 03_etl_limpieza.ipynb
-├── src/                       código fuente (producción)
-│   ├── ingestion/             (futuro) ingesta migrada
-│   ├── etl/                   (futuro) limpieza migrada
-│   ├── validation/
-│   │   └── control_datos.py   esquema Pandera del warehouse
-│   ├── features/              (futuro) feature engineering
-│   ├── models/                (futuro) entrenamiento LSTM / XGBoost
-│   └── pipelines/             (futuro) orquestación Prefect
-├── tests/                     (futuro) tests unitarios
-├── api/                       (futuro) FastAPI
-├── app/                       (futuro) dashboard Streamlit
-├── docker/                    (futuro) Dockerfile
-└── .github/workflows/         (futuro) CI/CD
+├── data/                   raw / interim / processed (crudos no versionados; tabla_features via DVC)
+├── notebooks/              exploración e iteración (01–09)
+├── src/                    código fuente (producción)
+│   ├── ingesta/            clientes OMIE / ESIOS / AEMET
+│   ├── procesamiento/      concatenacion.py · etl.py · features.py
+│   ├── validation/         control_datos.py (contrato Pandera + contrato de cobertura)
+│   ├── features/           feature_sets.py (selección de sets para modelado)
+│   ├── evaluacion/         metricas.py · backtesting.py
+│   ├── api/                FastAPI (main.py, schemas.py)
+│   └── orquestacion/       Prefect: pipeline_diario.py · reentrenamiento.py · programar.py
+├── tests/                  tests (pytest)
+├── reports/                salidas de evaluación
+├── docs/                   diario de aprendizaje (diario.md)
+└── mlflow.db               tracking + registry de MLflow
 ```
 
 ## Stack
 
 Python · pandas · Pandera · LSTM + XGBoost · MLflow · FastAPI · Prefect · Streamlit · Docker · GitHub Actions
 
+## Servicios locales
+
+Cómo levantar cada servicio y dónde queda su interfaz. Se usa `python -m ...` porque el App Control de Windows bloquea los *shims* `.exe`.
+
+| Servicio | Comando | URL |
+|----------|---------|-----|
+| Prefect (servidor + UI) | `python -m prefect server start` | http://127.0.0.1:4200 |
+| MLflow (tracking + registry) | `python -m mlflow ui` | http://127.0.0.1:5000 |
+| FastAPI (API de predicción) | `python -m uvicorn src.api.main:app --reload` | http://127.0.0.1:8000/docs |
+| Streamlit (dashboard, *pendiente*) | `python -m streamlit run app/dashboard.py` | http://localhost:8501 |
+
+Son los puertos por defecto de cada herramienta; quedarán declarados en `docker-compose.yml` al contenerizar (Fase 11), que pasará a ser la fuente de verdad de puertos y URLs.
+
+## Versionado de datos (DVC)
+
+El código va en git, pero los `.parquet` grandes no. Para versionarlos sin hinchar el repo se usa **DVC**: git guarda un *pointer* ligero (`.dvc`, con el md5 del fichero) y DVC guarda el dato real en un *remote*.
+
+Se versiona **`data/processed/tabla_features.parquet`** (la tabla que alimenta el entrenamiento). Versionarla ata cada modelo al dataset exacto con el que se entrenó — clave porque el pipeline **no es reproducible en el tiempo**: OMIE, ESIOS y AEMET cambian y añaden histórico, así que "regenerar desde código" no devuelve el dataset de hace meses; DVC sí.
+
+Remote local (`dvc-storage`, fuera del repo). Flujo:
+
+| Acción | Comando |
+|--------|---------|
+| Versionar / actualizar el dataset | `python -m dvc add data/processed/tabla_features.parquet` |
+| Guardar el pointer en git | `git add ...tabla_features.parquet.dvc && git commit -m "..."` |
+| Subir el dato al remote | `python -m dvc push` |
+| Recuperar el dato (otra máquina / estado pasado) | `python -m dvc pull` |
+
+Para volver a un estado pasado, `git checkout <commit>` + `python -m dvc checkout` recuperan código y dato sincronizados.
+
 ## Estado actual
 
-- ✅ Ingesta de las tres fuentes.
-- ✅ Integración en tabla maestra horaria en UTC (resolución de DST incluida).
-- ✅ ETL de limpieza + validación Pandera → `data/processed/tabla_maestra_procesada.parquet`.
-- ⬜ Feature engineering y entrenamiento de los dos modelos.
-- ⬜ Automatización semanal (re-ingesta incremental con *upsert* + Prefect) y despliegue.
+- ✅ Ingesta de las tres fuentes (OMIE, ESIOS, AEMET), modularizada en `src/ingesta/`.
+- ✅ Integración en tabla maestra horaria en UTC (DST resuelto) — `src/procesamiento/concatenacion.py`.
+- ✅ ETL de limpieza + validación Pandera → `tabla_maestra_procesada.parquet`.
+- ✅ Feature engineering (imputación en 3 capas, calendario, lags, marca de entrenables) → `tabla_features.parquet`.
+- ✅ Modelado: XGBoost, LSTM, ensemble e intervalos de predicción; MLflow (tracking + registry).
+- ✅ Serving con FastAPI; contenerización (Docker) y CI (GitHub Actions).
+- ✅ Orquestación con Prefect: pipeline diario (ingesta → cobertura → concat → ETL → features) y reentrenamiento semanal, con límite de concurrencia = 1.
+- ✅ Contrato de cobertura de fuentes crudas (suela de filas + frescura) como puerta del pipeline.
+- ✅ Versionado del dataset de modelado con DVC.
+- ⬜ Monitorización de drift (Evidently), dashboard (Streamlit), docs (MkDocs) y pulido del despliegue.

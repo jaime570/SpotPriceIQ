@@ -1,3 +1,5 @@
+
+
 """
 Contrato de datos del warehouse (capa `processed`) del proyecto prediccion-electrica.
 
@@ -15,6 +17,9 @@ Uso:
 #  forma funciona igual y evita avisos del linter en versiones anteriores.)
 import pandera as pa
 from pandera import Column, Check, DataFrameSchema
+import pandas as pd
+from pathlib import Path
+from datetime import date
 
 
 # --------------------------------------------------------------------------- #
@@ -35,22 +40,6 @@ ESTACIONES_SOL = [
     "barcelona_aeropuerto", "madrid_aeropuerto", "medina_de_pomar",
     "navalmoral_de_la_mata", "valencia_aeropuerto", "zaragoza_aeropuerto",
 ]
-
-# ESIOS que NO pueden ser negativas (generación / demanda)
-ESIOS_NO_NEGATIVAS = [
-    "demanda_prevista", "demanda_prevista_diaria",
-    "eolica_prevista", "eolica_prevista_d1",
-    "solar_fv_prevista", "solar_termica_prevista",
-    "demanda_real", "eolica_real",
-    "solar_fv_real",
-    "ciclo_combinado_real", "nuclear_real",
-]
-
-# ESIOS que SÍ pueden ser negativas -> sin cota inferior
-#   intercambios_real:  importación (-) / exportación (+)
-#   hidraulica_real:    negativa cuando hay bombeo (consumo)
-#   solar_termica_real: negativa de noche por consumos auxiliares (mantener el fluido)
-ESIOS_CON_NEGATIVOS = ["hidraulica_real", "intercambios_real", "solar_termica_real"]
 
 
 # --------------------------------------------------------------------------- #
@@ -79,15 +68,22 @@ def _columnas_aemet() -> dict:
     return cols
 
 
-def _columnas_esios() -> dict:
-    """Genera las 14 columnas de ESIOS (generación, demanda, intercambios)."""
-    cols = {}
-    for c in ESIOS_NO_NEGATIVAS:
-        cols[c] = Column(float, Check.ge(0), nullable=True)
-    for c in ESIOS_CON_NEGATIVOS:
-        cols[c] = Column(float, nullable=True)  # sin cota inferior
-    return cols
+# ESIOS del contrato: SOLO las previstas (forecasts). Las columnas `_real`
+# (generación/demanda observadas) se excluyen del pipeline por ser leakage
+# para el target, así que tampoco forman parte del contrato.
+ESIOS_PREVISTAS = [
+    "demanda_prevista", "demanda_prevista_diaria",
+    "eolica_prevista", "eolica_prevista_d1",
+    "solar_fv_prevista", "solar_termica_prevista",
+]
 
+
+def _columnas_esios() -> dict:
+    """Genera las columnas de ESIOS (solo previstas, todas >= 0 y nullable)."""
+    cols = {}
+    for c in ESIOS_PREVISTAS:
+        cols[c] = Column(float, Check.ge(0), nullable=True)
+    return cols
 
 # --------------------------------------------------------------------------- #
 # Esquema completo del warehouse                                               #
@@ -128,3 +124,73 @@ def validar_warehouse(df):
     todos los fallos, no solo el primero).
     """
     return schema_warehouse.validate(df, lazy=True)
+
+
+# --------------------------------------------------------------------------- #
+# Contrato de COBERTURA (sobre las fuentes crudas de data/interim)             #
+# --------------------------------------------------------------------------- #
+# Responde a "¿hay suficientes datos y son frescos?" — complementario al schema
+# de arriba, que valida el CONTENIDO de la maestra. Esto habría cazado el
+# desplome de ESIOS a 97 filas (que pasaba la validación de contenido).
+
+ROOT = Path(__file__).resolve().parents[2]
+INTERIM = ROOT / "data" / "interim"
+
+# Suelos sacados del recuento real de cada tabla cruda (~75-80%, con margen).
+# col_fecha = columna de fecha para el chequeo de frescura (None en OMIE: se
+# construye desde ano/mes/dia). dias_frescura = antigüedad máxima tolerada del
+# dato más reciente (AEMET publica con ~2 días de retraso, por eso es más laxo).
+COBERTURA = {
+    "tabla_OMIE":  {"min_filas": 40000, "col_fecha": None,           "dias_frescura": 3},
+    "tabla_ESIOS": {"min_filas": 25000, "col_fecha": "datetime_utc", "dias_frescura": 3},
+    "tabla_AEMET": {"min_filas": 15000, "col_fecha": "fecha",        "dias_frescura": 5},
+}
+
+
+def _fecha_maxima(df, col_fecha):
+    """Fecha (naive, sin hora) más reciente de una tabla cruda."""
+    if col_fecha is not None:
+        serie = pd.to_datetime(df[col_fecha], utc=True, errors="coerce")
+        return serie.max().tz_convert(None).normalize()
+    # OMIE no tiene columna de fecha: se construye desde ano/mes/dia
+    fechas = pd.to_datetime(df[["ano", "mes", "dia"]].rename(
+        columns={"ano": "year", "mes": "month", "dia": "day"}))
+    return fechas.max().normalize()
+
+
+def validar_cobertura() -> dict:
+    """Contrato de cobertura de las fuentes crudas (interim).
+
+    Por cada fuente comprueba: (1) al menos `min_filas` filas — detecta un
+    colapso tipo ESIOS-97; (2) que el dato más reciente no sea más viejo que
+    `dias_frescura` días — detecta una fuente que dejó de actualizarse.
+
+    Recoge TODOS los incumplimientos y, si hay alguno, lanza ValueError con el
+    informe completo. Si todo pasa, devuelve {fuente: (n_filas, fecha_max)}.
+    """
+    hoy = pd.Timestamp(date.today())
+    fallos = []
+    resumen = {}
+    for archivo, reglas in COBERTURA.items():
+        ruta = INTERIM / archivo
+        if not ruta.exists():
+            fallos.append(f"{archivo}: no existe el fichero ({ruta})")
+            continue
+
+        df = pd.read_csv(ruta)
+        n = len(df)
+        fecha_max = _fecha_maxima(df, reglas["col_fecha"])
+        resumen[archivo] = (n, fecha_max)
+
+        if n < reglas["min_filas"]:
+            fallos.append(f"{archivo}: {n} filas < mínimo {reglas['min_filas']}")
+
+        antiguedad = (hoy - fecha_max).days
+        if antiguedad > reglas["dias_frescura"]:
+            fallos.append(
+                f"{archivo}: dato más reciente {fecha_max.date()} "
+                f"({antiguedad} días > {reglas['dias_frescura']} permitidos)")
+
+    if fallos:
+        raise ValueError("Contrato de cobertura incumplido:\n- " + "\n- ".join(fallos))
+    return resumen

@@ -526,3 +526,295 @@ para el gating XGBoost↔LSTM por régimen. Prerrequisito: exportar de Colab los
 scaler + config; ahora solo hay `reports/lstm_tensores.npz` (tensores de entrada, no el modelo). El registry
 ya soporta dos modelos independientes; el gating (elegir cuál según régimen) es trabajo de la Fase 10, con la
 señal de régimen que dará la monitorización de drift — no se cablea a mano.
+
+
+---
+
+## 2026-09-09 — Fase 7: Serving con FastAPI
+
+Objetivo: convertir "tengo un modelo en el registry" en "tengo un servicio que predice". Un modelo
+guardado no vale nada si nadie puede llamarlo; el serving es la puerta de entrada al modelo.
+
+**Concepto — qué es y por qué una API (no un script)**
+FastAPI envuelve el modelo en un servicio web. Da tres cosas gratis: validación de entrada/salida con
+Pydantic (rechaza basura antes de llegar al modelo), documentación interactiva automática en `/docs`
+(Swagger), y es async. Por qué una API y no llamar al modelo en un script: es la **puerta común y
+reutilizable** para muchos consumidores (el proceso diario de Prefect, el dashboard de Streamlit, quizá
+un tercero), versionada y testeada, sin que cada uno reinvente "cómo llamar al modelo". Es la forma que
+espera el sector.
+
+**Estructura**
+`src/api/main.py` (app + endpoints) y `src/api/schemas.py` (contratos Pydantic). Se arranca con
+`python -m uvicorn src.api.main:app --reload` (el `python -m` por el App Control de Windows, que
+bloquea `uvicorn.exe`).
+
+**Carga del modelo en el `lifespan` (el pago del registry)**
+El modelo se carga UNA vez al arrancar (no en cada petición — sería lento), en el handler `lifespan`
+de FastAPI. Se hace con `mlflow.pyfunc.load_model("models:/spotprice-xgboost@champion")`: pide el modelo
+por alias, sin saber que es la v1 ni dónde está el fichero. El día que se promueva una v2 (Fase 10), esta
+misma línea sirve la nueva sin tocar código. `pyfunc` es la interfaz genérica (mismo `.predict()` para
+XGBoost o el LSTM futuro) → clave para el gating.
+
+**Endpoints**
+- `/health` (GET) → ¿vivo? (trivial pero esencial para Docker/monitorización).
+- `/model-info` (GET) → nombre, versión (resuelta desde `@champion`), run_id y `MAE_wf_ref` (15,70) →
+  la API dice qué sirve Y cómo de bueno se espera que sea.
+- `/predict` (POST) → predice.
+
+**Decisión de diseño — qué recibe `/predict` (opción A vs B)**
+- Opción A (la de ahora): recibe el vector de las 102 features predictivas ya construido. La API valida
+  el conjunto y predice. Es el MOTOR: limpio, aislado, testeable.
+- Opción B (futura): recibe una fecha D+1 y la API arma/busca las features sola. Es la PUERTA CÓMODA.
+Se hace A primero para no mezclar "aprender a servir" con "orquestar features". En producción nadie mete
+102 features a mano: las arma el sistema (Prefect) y llama a la API; el dashboard la consume.
+
+**Contrato Pydantic**
+Request = `features: dict[str, float]` (un solo campo mapa nombre→valor; declarar 102 campos sería
+inmantenible). Pydantic garantiza que son floats; la comprobación de que estén las 102 exactas la hace el
+endpoint (si faltan → HTTP 422 con mensaje). El vector se arma como DataFrame de 1 fila EN EL ORDEN de
+`get_feature_sets(...)["predictivo"]` (el modelo es sensible al orden de columnas). Anti-leakage: las
+esperadas salen del set "predictivo", nunca del explicativo.
+
+**Descubrimiento 14 — la API confirma el sesgo de la interpretabilidad**
+Con una fila real (precio real 123,795 €/MWh), la API predijo 111,75 → ~12 corto. No es un fallo: esa
+hora es un precio ALTO y el modelo infra-predice los picos, exactamente el sesgo -3,58 ("encogimiento
+hacia el régimen viejo") hallado con SHAP en el Bloque 6. Coherencia total entre lo interpretado y lo
+servido.
+
+**Tests (pytest + TestClient)**
+`tests/test_api.py`: `TestClient` levanta la app en memoria sin uvicorn. 4 tests: /health OK, /model-info
+correcto, /predict con payload válido (200) y /predict incompleto rechazado (422) — camino feliz + portero.
+Gotcha nº1 de FastAPI: hay que usar `with TestClient(app) as c:` para que se dispare el `lifespan` (si no,
+el modelo no se carga y /predict peta con KeyError). Los 4 en verde.
+
+
+## 2026-09-15 — Fase 8: Orquestación con Prefect
+
+**Qué se hizo**
+Flow diario de ingesta (`src/orquestacion/pipeline_diario.py`) que encadena las
+tres fuentes como subflows: `ingesta_omie()`, `ingesta_esios()`, `ingesta_aemet()`.
+Programado para ~13h (tras la subasta de OMIE). Más un flow de reentrenamiento
+periódico. `python -m prefect ...` por el App Control de Windows (bloquea los shims `.exe`).
+
+**Decisión de arquitectura — orquestación por capas (importante)**
+Los módulos de dominio (`ingesta/`, `procesamiento/`) NO dependen de Prefect: son
+Python puro, importables desde notebooks o tests sin arrancar un runtime. Prefect
+vive solo en `src/orquestacion/`. La orquestación **se hereda por el contexto de
+llamada, no por decorar cada función**: lo que se programa y ejecuta a diario es el
+`@flow` de arriba; todo lo que llame desde dentro (sea `@task`, subflow o función
+normal) corre dentro de esa ejecución, con sus logs y su parada ante excepción.
+
+**Cuándo un `@task` y cuándo no**
+`@task` es la unidad de reintento/caché/observabilidad. Tiene sentido en la
+**ingesta** (una API que falla por un pico de red y se recupera). NO tiene sentido
+en transformaciones en memoria (no hay nada que reintentar en aislado, y pasar
+DataFrames entre tasks obliga a serializar sin beneficio). Por eso las funciones de
+procesamiento se dejan puras y se envuelven —si hace falta— desde la capa de
+orquestación, no al revés.
+
+---
+
+## 2026-09-15 — La saga del bug de ESIOS: `guardar()` machacaba el histórico
+
+**El síntoma**
+La tabla ESIOS cruda había quedado en **97 filas**. La validación de CONTENIDO
+(pandera) la daba por buena: 97 filas con tipos y rangos correctos pasan el
+esquema. El colapso era invisible para el contrato de contenido.
+
+**La causa raíz (doble)**
+1. `guardar()` escribía con `to_csv` **sin append** → cada ejecución sobrescribía
+   el fichero entero en vez de acumular.
+2. La ventana de descarga estaba **fija a 4 días**. Combinada con lo anterior, cada
+   corrida dejaba solo los últimos días y borraba todo el histórico previo.
+
+**El arreglo**
+- Se confirmó que la API de ESIOS **sí sirve histórico** (no era una limitación de la fuente).
+- Re-pull completo 2023→hoy → recuperadas las **32.496 filas**.
+- Se blindó `guardar()`: **append + dedupe** (`keep="last"`, reconvirtiendo `datetime_utc`)
+  + `sort` + **ventana dinámica** (7 días atrás, 1 adelante).
+
+**Alcance del daño (honestidad)**
+El modelo ya entrenado NO se vio afectado: `tabla_features` conservaba el histórico
+completo. Lo que estaba roto era la **reproducibilidad** (regenerar desde crudo daba
+97 filas). Ahora arreglado. Lección: una validación de contenido no detecta un
+colapso de volumen → de aquí nace el contrato de cobertura (siguiente entrada).
+
+---
+
+## 2026-09-15 — Fase 2: contrato de cobertura (`validar_cobertura`)
+
+**Qué se hizo**
+Nueva función en `control_datos.py` complementaria al esquema de pandera. El esquema
+valida el CONTENIDO de la maestra; la cobertura valida las FUENTES CRUDAS antes de
+procesar: (1) suela de filas por fuente (detecta un colapso tipo ESIOS-97) y (2)
+frescura — que el dato más reciente no sea más viejo que `dias_frescura` días
+(detecta una fuente que dejó de actualizarse). Recoge todos los fallos y lanza
+`ValueError` si hay alguno.
+
+**Frescura: `hoy − fecha_max`**
+`hoy` = fecha de calendario del sistema; `fecha_max` = último dato del DataFrame.
+La resta da los días de retraso desde la última ingesta. Umbrales: OMIE/ESIOS 2 días,
+AEMET 4 (publica con ~2 días de retraso).
+
+**Supuesto documentado (UTC/local)**
+La frescura se mide en días de calendario comparando `hoy` (local) contra `fecha_max`
+(derivada de `datetime_utc`, UTC). Para umbrales en días completos no cambia el
+veredicto, pero queda anotado como supuesto.
+
+**Verificado (2026-09-16)**: pasa. Filas muy holgadas; ESIOS confirma las 32.496 recuperadas.
+
+**Limitación (honestidad)**
+El suelo de filas detecta un colapso TOTAL (ESIOS-97), no una degradación PARCIAL
+reciente (perder los últimos 3 días no baja del mínimo). Es el alcance buscado ahora.
+
+---
+
+## 2026-09-16 — Extensión del pipeline: concatenación y ETL modularizados
+
+**Objetivo**
+Encadenar `concat → etl → features` tras la ingesta, para que el flow diario llegue
+hasta `tabla_features.parquet`. Se convierten los notebooks 02/03/04 en módulos de
+`src/procesamiento/`.
+
+**`concatenacion.py` cerrado**
+Función orquestadora `construir_tabla_maestra()` (cargar → pivotar AEMET →
+datetime OMIE/ESIOS → concatenar) + `if __name__`. Verificado con datos reales:
+**30.623 filas × 96 columnas**, `datetime_utc` único y ordenado, target `precio_espana`
+al 100%, ESIOS previstas al 100%, 0 duplicados. Las 30.623 filas frente a las ~32.448
+horas teóricas del rango cuadran con el **hueco conocido de OMIE (~1.848 horas)**
+pendiente de imputación.
+
+**Decisión de arquitectura — `pivot` vs `pivot_table` (capa estructural vs limpieza)**
+El notebook 02 usaba `.pivot()` (reorganiza, NO agrega, tolera strings). Al modularizar
+se probó `.pivot_table()`, que SIEMPRE agrega (con `mean` por defecto) y por tanto exige
+columnas numéricas → reventaba con las de AEMET en texto. Se decide **volver a `pivot`**
+y mantener la limpieza de tipos en el ETL. Motivo: el artefacto se llama `tabla_maestra_
+ESTRUCTURAL` — esa capa es *estructura* (unir y alinear fuentes), no *limpieza*. Separar
+"montar la estructura" (concatenación) de "limpiar el contenido" (ETL) es la separación
+de responsabilidades correcta y coherente con las capas interim→processed. `pivot` además
+exige pares (fecha, estación) únicos → chequeo de integridad gratis (verificado: 0 duplicados).
+
+**Decisión de dominio — centinelas de AEMET**
+AEMET publica en formato español (coma decimal) y mete códigos de texto en columnas
+numéricas. En `prec`: `'Ip'` (241 casos) = precipitación **i**na**p**reciable (<0,1 mm) y
+`'Acum'` (1 caso) = acumulado de varios días. Decisión:
+- `'Ip'` → **0** (sabemos que casi no llovió; es dato real, no hueco).
+- `'Acum'` → **NaN** (el valor diario es desconocido; lo trata la imputación).
+
+**Bug encontrado y corregido (mejora sobre el notebook)**
+En el notebook 03 el orden era `replace({'Ip': 0})` (0 entero) ANTES de `.str.replace`.
+Como `.str` sobre un entero devuelve NaN, los 241 `'Ip'` se convertían silenciosamente
+en **NaN**, no en 0 — la decisión documentada no se ejecutaba. En `etl.py` se corrige el
+orden: **coma→punto primero, luego centinelas, luego `astype(float)`**, así los 241 `'Ip'`
+se conservan como 0. Impacto real bajo (una variable meteo, además imputada), pero es el
+tipo de fallo que solo aflora verificando con datos, no a ojo.
+
+**`etl.py` modularizado**
+`ejecutar_etl()`: cargar estructural → `limpiar_aemet` → `validar_warehouse` (que
+**propaga** si falla: puerta dura, no `try/except` que trague) → guardar
+`tabla_maestra_procesada.parquet`. Rutas relativas con `Path(__file__).parents[2]`
+(fuera el `sys.path.append("..")` del notebook). `select_dtypes('object')` aísla las
+columnas de AEMET dinámicamente, sin listas fijas (tras la concatenación, las únicas
+de texto son las de AEMET).
+
+**Desajuste contrato ↔ pipeline por leakage (hallazgo importante)**
+Al ejecutar el ETL, la validación falló con `COLUMN_NOT_IN_DATAFRAME` en las **8
+columnas `_real`** de ESIOS. El esquema de pandera aún las exigía, pero el pipeline las
+excluye (correctamente) por ser la tabla explicativa **leakage** para el target. El
+contrato estaba obsoleto: nunca se había validado contra los datos sin leakage. Se
+actualizó `control_datos.py`:
+- `ESIOS_NO_NEGATIVAS` → renombrada a **`ESIOS_PREVISTAS`** (6 columnas). El eje que importa
+  ahora es *prevista vs real-excluida*, no *signo*: la distinción negativas/no-negativas
+  existía para contrastar con las `_real`, que ya no están.
+- Eliminada `ESIOS_CON_NEGATIVOS` (solo contenía `_real`).
+
+**Matiz de dominio pendiente (a futuro)**
+La generación `_real` de D-1 SÍ es conocida a la hora de predecir D+1 y **no** sería
+leakage como feature con lag. Reincorporarla así es una decisión aparte, no abordada hoy.
+
+---
+
+
+## 2026-09-17 — Cierre y puesta en marcha del pipeline diario (features, cableado, concurrencia)
+
+**Feature engineering modularizado** (`src/procesamiento/features.py`, desde el notebook 04)
+Imputación en tres capas por CAUSA del hueco: (1) interpolación temporal para micro-huecos ≤6h,
+(2) donante entre estaciones AEMET (solo temperatura, correlación 0,9+) con offset mensual, (3)
+climatología (media mensual) para viento/lluvia/sol. Después: calendario + cíclicas, lags de precio,
+y la marca `entrenable` **al final** (tras los lags, para que sus NaN cuenten). Rutas relativas con
+`parents[2]`. Verificado: 30.623 × 112, 30.263 filas entrenables.
+
+**Cableado del pipeline diario** (`pipeline_diario.py`)
+Cadena completa: ingesta → cobertura (puerta) → concat → etl → features. Las funciones de dominio siguen
+siendo Python puro; en la capa de orquestación se envuelven en `@task` finos. Se llaman **directas** (no
+`.submit()`), así Prefect las ejecuta en serie y el orden queda garantizado sin `wait_for`. La cobertura
+va con `retries=0` (reintentar un chequeo no crea datos).
+
+**Umbrales de frescura ajustados** (OMIE 3, ESIOS 3, AEMET 5 días)
+Los 2/4 originales vivían justo en el filo y saltaban con un solo día sin ejecutar. Criterio nuevo:
+umbral = retraso de publicación de la fuente + colchón para días sin correr (AEMET publica con ~2 días
+de retraso, por eso 5). La puerta pasa a ser una alarma útil en vez de un falso positivo cada finde.
+
+**Saga de concurrencia (hallazgo importante)**
+Al levantar `serve()` por primera vez, recogió varios runs "Late" acumulados (quick-runs previos sin
+ejecutor) y los lanzó **a la vez**. Como las etapas se comunican por ficheros compartidos, varios pipelines
+leyendo/escribiendo los mismos `.parquet` provocaron una **condición de carrera**: un `concat` falló con
+`ValueError: Index contains duplicate entries, cannot reshape`. Causa: un lector pilló `tabla_AEMET` a medio
+reescribir (`to_csv` no es atómico) con duplicados transitorios. Síntoma revelador: el mismo código fallaba
+en un run y no en otro → no-determinismo = carrera.
+
+Lo bonito: la decisión de usar **`.pivot()` en vez de `.pivot_table()`** actuó de red de seguridad —falló
+ruidosamente ante los duplicados en vez de promediarlos en silencio—. `pivot_table` habría producido una
+tabla mal sin avisar.
+
+**Solución:** `concurrency_limit=1` en el deployment de ingesta (en `programar.py`). Aunque se acumulen runs,
+se ejecutan en serie, uno tras otro, nunca solapados → carrera eliminada de raíz.
+
+**Nota operativa (Prefect):** el *servidor* (`prefect server start`, UI en 4200) orquesta y muestra; el
+`serve()` (`programar.py`) es quien **ejecuta**. Un run cuya hora pasó sin ejecutor queda "Late" y se recoge
+en cuanto `serve()` vuelve a estar vivo. En producción real, ambos procesos van siempre encendidos (Docker).
+
+---
+
+## 2026-09-17 — Fix del filtro `entrenable` en reentrenamiento + versionado con DVC
+
+**Fix en `reentrenamiento.py`**
+`entrenar()` hacía `modelo.fit(df[feats], df[TARGET])` sobre **todo** el df, sin filtrar por `entrenable`.
+Entrenaba sobre ~360 filas que la máscara marca como NO entrenables (primera semana sin `precio_lag_168`,
+cola, huecos), con NaN justo en `lag_24`/`lag_168` — las features más importantes según SHAP. XGBoost tolera
+NaN, así que no daba error: un fallo **silencioso**. Corregido añadiendo `df = df[df["entrenable"]]` antes del
+fit, para que producción entrene sobre la misma población (X sin NaN) que se evaluó en los notebooks. Coherencia
+recuperada entre lo documentado, lo medido y lo servido.
+
+**Versionado del dataset con DVC**
+Se versiona `data/processed/tabla_features.parquet`. El porqué de fondo: el pipeline **no es reproducible en el
+tiempo** —OMIE/ESIOS/AEMET cambian y añaden histórico, así que "regenerar desde código" no devuelve el dataset
+de hace meses—. DVC guarda el snapshot exacto y lo ata a un commit de git, de modo que cada modelo queda ligado
+al dataset con el que se entrenó (auditable y reproducible).
+
+Mecánica: git versiona un *pointer* `.dvc` (con el md5); DVC guarda el dato real en un *remote* local
+(`dvc-storage`, fuera del repo). Flujo: `dvc add` (actualiza el pointer + caché) → `git commit` del pointer
+(ata código↔dato) → `dvc push` (sube el dato). Alcance: solo `tabla_features` (la que alimenta el entrenamiento);
+la procesada/interim se derivan y los crudos se regeneran. Se matizó la frase del README ("los datos no se
+versionan"): código en git, dataset clave en DVC, crudos regenerables.
+
+---
+
+
+### Próximos pasos (orden de cierre)
+
+Estado: Fases 0–5 (modelado), Bloque 6 (interpretabilidad), Bloque 7 (MLflow+DVC), Fase 7 (serving) y Fase 8 (Prefect) ✅. Extensión del pipeline: concatenación y ETL modularizados y verificados; falta features + cableado completo.
+
+1. **Docker + docker-compose + GitHub Actions (CI)** — contenerizar API + MLflow; automatizar lint+tests
+   en cada push. PRERREQUISITO antes del push a GitHub: `nbstripout` a los notebooks gigantes
+   (01_ingesta_esios ~157MB, aemet ~87MB) — GitHub rechaza >100MB.
+2. **Prefect (orquestación)** — flow de ingesta diaria (~13h, tras subasta) + flow de reentrenamiento.
+3. **Evidently (monitorización)** — data/model drift, predicho vs real diario, trigger de reentrenamiento;
+   AQUÍ entra el **gating XGBoost↔LSTM por régimen** → requiere registrar el LSTM (`spotprice-lstm`) como
+   custom pyfunc (prerequisito: exportar de Colab pesos de las 4 semillas + scaler + config de ventaneo).
+4. **Dashboard Streamlit** — predicción D+1 con intervalos; panel de drift; predicho vs real.
+5. **Docs MkDocs + README pulido** — arquitectura, decisiones, caso de negocio (€ ahorrados).
+6. **Al final:** economía/trading (P&L, Sharpe) y tuning con Optuna.
+
+Cabos sueltos: opción B del `/predict` (por fecha); limpiar demanda/eolica GENÉRICAS del XGBoost a solo-D+1;
+gas MIBGAS/TTF como variable e indicador líder de crisis (limitación documentada).
