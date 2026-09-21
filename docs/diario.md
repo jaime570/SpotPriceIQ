@@ -801,6 +801,46 @@ versionan"): código en git, dataset clave en DVC, crudos regenerables.
 ---
 
 
+## 2026-09-21 — Correlación espuria en la imputación por donante + guard de solape
+
+**Cómo salió el hilo (desde la Fase 9)**
+Montando el data drift con Evidently, las features climáticas de Madrid y Barcelona salían como "driftadas".
+Al investigar, descubrí que la estación **Madrid aeropuerto no existe en los datos crudos hasta 2025** (2023-24
+solo había VALMADRID, un pueblo de Zaragoza que el nombre confunde con Madrid). Primer susto: pensé que 2023-24
+tendrían ~0 filas entrenables. **Falso** — la imputación corre *antes* de `marcar_entrenable`, así que los huecos
+ya estaban rellenos y los cuatro años son entrenables (8521/8784/8616/4366). Lección lateral: no razonar sobre el
+pipeline saltándose pasos; y los números que "bailaban" en el notebook eran estado desincronizado (celdas fuera
+de orden) — la verdad se lee del parquet en disco, no de la memoria del kernel.
+
+**El hallazgo de fondo: donante elegido por una correlación falsa**
+`imputar_donante` rankea candidatas por `corrwith` y coge la más correlacionada con cobertura suficiente. Para
+Madrid eligió **Barcelona**, con correlación **1.000**... calculada sobre solo **72 puntos de solape** (Madrid y
+Barcelona tienen histórico complementario: casi no coinciden con dato real a la vez). Correlación espuria de
+manual: magnitud alta, muestra minúscula, cero fiabilidad. Mientras tanto, valmadrid (0.966 sobre **12071**
+puntos) y estaciones de interior quedaban por debajo en el ranking. Consecuencia real: Madrid 2023-24 se rellenaba
+desde una ciudad **costera**, con clima suave — el dato imputado variaba solo 1,3 °C año a año frente a los ~3,8 °C
+de la variabilidad continental real.
+
+**El fallo de método:** el ranking por correlación no miraba **sobre cuántos puntos** estaba calculada cada
+correlación. Un `r` alto sobre pocos datos no significa nada.
+
+**Fix:** parámetro `solape_minimo` (por defecto 1000) en `imputar_donante` e `imputar_todas_donante`. Antes de
+considerar a una candidata, se exige que receptora y candidata coincidan con dato real en al menos N filas; si no,
+`continue`. Barcelona (72) se descarta; el bucle baja hasta la primera fiable. **Resultado verificado:** el donante
+de Madrid pasa a ser **Alcázar de San Juan** (0.991 sobre 12023 puntos, clima continental de La Mancha, coherente
+con Madrid). La variabilidad interanual del Madrid imputado sube de 1,3 a **3,60 °C**, ya realista.
+
+**Distinción a recordar:** *cobertura* (¿la candidata tiene dato donde la receptora tiene hueco? → sirve para
+rellenar) ≠ *solape* (¿coinciden ambas con dato a la vez? → sirve para fiarse de la correlación). Barcelona tenía
+cobertura alta (0.916) pero solape ínfimo (72). Hacen falta las dos.
+
+**Limitación documentada:** Madrid y Barcelona pre-2025 siguen siendo valores **imputados**, no observados. Para
+interpretar el drift hay que tenerlo presente: parte del "drift" de esas features no es cambio del clima, sino el
+**cambio de método** (imputado suave 2023-24 → observación real ruidosa 2025+). Para medir drift climático real,
+comparar desde 2025 o excluir esas ciudades en el tramo imputado.
+
+---
+
 ### Próximos pasos (orden de cierre)
 
 Estado: Fases 0–5 (modelado), Bloque 6 (interpretabilidad), Bloque 7 (MLflow+DVC), Fase 7 (serving) y Fase 8 (Prefect) ✅. Extensión del pipeline: concatenación y ETL modularizados y verificados; falta features + cableado completo.
