@@ -17,11 +17,6 @@ ENV/
 # --- Jupyter ---
 .ipynb_checkpoints/
 
-# --- Datos (opcional: descomenta si no versionas los datos) ---
-# data/raw/
-# data/interim/
-# data/processed/
-
 # --- VS Code / IDE ---
 .vscode/
 .idea/
@@ -50,3 +45,5 @@ Claude outputs/
 # --- Backups de notebooks ---
 *.bak
 *.bak2
+# --- Reports generados (regenerables; no se versionan en Git) ---
+reports/*.html
