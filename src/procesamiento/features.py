@@ -18,7 +18,7 @@ def imputar_capa_1 (df_maestra_procesada, columnas=None):
     df = df.reset_index()
     return df
 
-def imputar_donante(df, receptora, candidatas, umbral = 0.8):
+def imputar_donante(df, receptora, candidatas, umbral = 0.8, solape_minimo = 1000):
     """imputacion de huecos > 6 horas en capa 2 (donante con offset mensual)"""
 
     df = df.copy()
@@ -28,6 +28,9 @@ def imputar_donante(df, receptora, candidatas, umbral = 0.8):
     mascara_receptora = df[receptora].isna()
     n_huecos = mascara_receptora.sum()
     for candidato in ranking.index:
+        solape = (df[receptora].notna() & df[candidato].notna()).sum()
+        if solape < solape_minimo:
+            continue
         coinciden = df.loc[mascara_receptora, candidato].isna().sum()
         cobertura = 1 - coinciden / n_huecos
         if cobertura > umbral :
@@ -44,14 +47,14 @@ def imputar_donante(df, receptora, candidatas, umbral = 0.8):
         df[receptora] = df[receptora].fillna(donante_ajustado)
         return df
 
-def imputar_todas_donante(df, variables, umbral=0.8):
+def imputar_todas_donante(df, variables, umbral=0.8, solape_minimo=1000):
     """Imputacion de huecos > 6 horas en capa 2 (donante con offset mensual) para todas las variables"""
 
     for var in variables:
         columnas_var = df.columns[df.columns.str.startswith(var)]
         for receptora in columnas_var:
             if df[receptora].isna().sum() > 0:
-                df = imputar_donante(df, receptora, columnas_var, umbral)
+                df = imputar_donante(df, receptora, columnas_var, umbral, solape_minimo)
     return df
 
 def imputar_climatologia (df, columnas):
