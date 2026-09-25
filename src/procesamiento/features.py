@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import holidays
+from src.features.feature_sets import get_meteo
 
 PATH = Path(__file__).resolve().parents[2]
 PROCESSED = PATH / "data" / "processed"
@@ -99,6 +100,16 @@ def añadir_lags_precio(df):
     df['precio_media_24'] = (df['datetime_utc'] - pd.Timedelta(hours=24)).map(media_24)
     return df
 
+def añadir_lags_meteo(df,dias=3):
+    df = df.copy()
+    columnas = get_meteo(df)
+    diario =df.groupby("fecha")[columnas].mean().reset_index()
+    diario["fecha"] = diario["fecha"] + pd.Timedelta(days=dias)
+    nombres_nuevos = { c: f"{c}_lag{dias}d" for c in columnas } 
+    diario = diario.rename(columns =nombres_nuevos)
+    df = df.merge(diario, on="fecha", how="left")
+    return df
+
 def marcar_entrenable(df):
 
     """Marca las filas entrenables y completas de features"""
@@ -120,12 +131,13 @@ def ejecutar_features():
     df = imputar_todas_donante(df, ["tmed_", "tmax_"])         # capa 2: donante (solo temperatura)
     cols_temp = df.columns[df.columns.str.startswith(("tmed_", "tmax_"))]
     df[cols_temp] = df[cols_temp].ffill().bfill()              # residual de temperatura
-    cols_clima = df.columns[df.columns.str.startswith(("vel", "racha_", "prec", "sol"))]
+    cols_clima = df.columns[df.columns.str.startswith(("velmedia", "racha_", "prec_", "sol_"))]
     df = imputar_climatologia(df, cols_clima)                  # capa 3: climatologia (viento/lluvia/sol)
 
     # --- Feature engineering ---
     df = añadir_calendario(df)
     df = añadir_lags_precio(df)
+    df= añadir_lags_meteo(df)
     df = marcar_entrenable(df)                                 # ultimo: despues de los lags
 
     df.to_parquet(PROCESSED / "tabla_features.parquet", index=False)

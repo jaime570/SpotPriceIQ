@@ -905,3 +905,60 @@ Cabos sueltos: opción B del `/predict` (por fecha); limpiar demanda/eolica GEN�
 gas MIBGAS/TTF como variable e indicador líder de crisis (limitación documentada); verificar que los notebooks
 gigantes (`01_ingesta_esios` ~157MB, `01_ingesta_aemet` ~87MB) están fuera de git (`nbstripout` / `.gitignore`),
 ya que GitHub rechaza ficheros >100MB.
+
+
+---
+
+## 2026-09-25 — Limpieza: XGBoost a solo-D+1 (cierra el cabo suelto de las previsiones genéricas)
+
+**Problema.** `get_feature_sets` seleccionaba las previstas con `str.contains("_prevista")`, que capturaba
+tanto las D+1 como las GENÉRICAS (`demanda_prevista` 544, `eolica_prevista` 541). Las genéricas se
+refrescan intradía y el histórico guarda la última versión, no la disponible al cierre de la subasta
+(12h D-1) → leakage suave + discrepancia train/serving. El champion v1 entrenó con las 6 (102 features).
+La LSTM ya usaba solo D+1, así que la comparación XGB vs LSTM no era del todo justa.
+
+**Arreglo (en la fuente de verdad).** `feature_sets.py`: tupla `_PREVISTAS_GENERICAS` excluida del set
+predictivo → 100 features. Previstas que quedan: `demanda_prevista_diaria`, `eolica_prevista_d1`,
+`solar_fv_prevista`, `solar_termica_prevista`. Test nuevo `tests/test_feature_sets.py` que lo blinda.
+`entrenable` no cambia: las genéricas y las D+1 tienen los mismos 23 NaN.
+
+**Experimento (walk-forward expanding, inicio=12, mismos hiperparámetros, tabla_features actual, 33 folds):**
+
+| Set | Features | MAE wf | ± std | RMSE wf |
+|---|---|---|---|---|
+| Con genéricas | 102 | 16,26 | 5,46 | 20,71 |
+| Solo D+1 | 100 | 16,24 | 5,08 | 20,81 |
+
+Diferencia media por fold −0,015 €/MWh (error estándar 0,09) → **empate estadístico**. Peor en 20/33
+meses pero por márgenes pequeños (±0,5), y claramente mejor en primavera 2024 (−1,8 / −1,1). Menor
+varianza entre folds.
+
+**Lectura.** Las genéricas no aportaban señal propia: eran redundantes con las D+1 (r≈0,98) y el
+leakage intradía que *podían* meter no se traduce en ventaja medible. Coste de quitarlas ≈ 0, riesgo
+eliminado > 0 → misma conclusión que el principio de precaución de la LSTM, ahora confirmado con datos.
+
+**Nota importante — el 15,70 ya no es la referencia.** El 15,70 se midió con 30 folds (datos hasta
+~jun-2026). Con el full-refresh (hasta sep-2026, 33 folds) los meses nuevos jul/ago/sep-2026 son duros
+(19-25 €/MWh). La **cifra oficial** es la del notebook 06: **walk-forward solo-D+1 = 16,14 ± 5,17**
+(33 folds), registrada como `MAE_wf_ref` de la **v6 @champion**. Esa es la línea base contra la que debe
+medir la Fase 9.2.
+
+**Descubrimiento — el holdout pierde contra el naive: model drift por no reentrenar**
+Holdout nuevo (23-mar → 23-sep-2026): XGB MAE 19,49 vs naive D-1 18,06 (en RMSE gana: 25,96 vs 28,14).
+Por meses: abr-jun gana con holgura (10,8-11,5 vs 14,4-16,2), pero jul/ago/sep pierde (21,5 / 29,2 / 41,0
+vs 20,0 / 19,9 / 26,2) con sesgo real−pred de +12,6 / +18,6 / +32,8: el precio sube de ~14 a ~140 €/MWh de
+media y el modelo, congelado desde marzo, infrapredice cada vez más. El walk-forward (reentreno mensual) no
+lo sufre igual: 16,14 vs naive 18,61. Lectura: la **cadencia de reentrenamiento** importa tanto como el
+modelo → motivación directa de 9.2 (predicho vs real) y 9.3 (trigger). Es el sesgo de SHAP (−3,58) con el
+signo cambiado: "encogimiento" hacia el nivel de precios del entrenamiento.
+**Corrección — el "explicativo" del notebook 06 ya no es el explicativo.** `tabla_features` no tiene columnas
+`_real` desde que se quitó el merge de ESIOS explicativo en `concatenacion.py`, así que ese set quedó en meteo +
+lags + calendario (96 features, sin ESIOS). Sus cifras (holdout 19,35, WF 17,02) son en realidad una ablación
+"sin previstas ESIOS": quitarlas empeora el WF en ~0,9 → las previstas aportan valor real. El hallazgo histórico
+del explicativo con `_real` (16,73 vs 15,70) sigue siendo válido, pero no se ha re-medido. Se retira el set
+explicativo del código.
+
+**Deuda detectada en el notebook 06:** la celda 17 compara contra un naive de holdout fijado a mano (15,5,
+de otro periodo) y `baseline_walkforward.parquet` llega solo a jun-2026 (30 meses) → las tablas por año de
+las celdas 10/12 mezclan periodos en 2026 (expanding hasta jun, rolling hasta sep). Arreglo: re-ejecutar el
+notebook 05 y calcular el naive de la celda 17 sobre el mismo `test`.
