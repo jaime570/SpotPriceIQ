@@ -121,7 +121,7 @@ Walk-forward mensual sobre todo el histórico. Cada fold = un mes de test; se re
 `precio_lag_24` tiene 96 NaN: arranque de la serie + huecos internos ligados a DST/días incompletos (may-2023, oct/nov-2025). El target no tiene NaN. Las horas sin lag disponible se **excluyen** de la métrica con `dropna` dentro de cada fold (no se imputan, para no falsear la evaluación). `entrenable` no cubre estos NaN (no mira los lags).
 
 **Resultado**
-- MAE walk-forward = **18,33 ± 4,69** €/MWh (31 folds).
+- MAE walk-forward = **18,33 ± 4,69** €/MWh (30 folds).
 - El holdout único daba **15,5** → era **optimista**. La media de los 6 meses del holdout (ene–jun 2026) es ≈15,4, arrastrada por un feb-2026 anómalo (MAE 7,78, el mejor de los 31 meses) y varios meses de primavera. El walk-forward destapa el error real, más alto.
 
 **Hallazgo de dominio: el error del naive es ESTACIONAL**
@@ -147,7 +147,7 @@ Comparación expanding vs rolling: sin sentido con baselines (el naive ignora el
 
 **Resultado**
 - Holdout: MAE **13,61** / RMSE 18,16 (vs naive holdout 15,5 / 23,69).
-- Walk-forward (31 folds): MAE **15,70 ± 5,29** vs naive **18,33 ± 4,69**. El holdout era optimista (igual que pasó con el naive). Número honesto: **15,7 ≈ 14% mejor** que el baseline.
+- Walk-forward (30 folds): MAE **15,70 ± 5,29** vs naive **18,33 ± 4,69**. El holdout era optimista (igual que pasó con el naive). Número honesto: **15,7 ≈ 14% mejor** que el baseline.
 
 **Hallazgo clave: la media esconde dos regímenes (análisis mes a mes)**
 - XGB gana en **24 de 30 meses**. Donde más: otoño/invierno de alta volatilidad (oct-2024 +11,9; oct-2025 +11,5; nov-2025 +10,4) — justo donde el naive era peor. Confirma la tesis: el modelo aporta donde más se necesita.
@@ -384,39 +384,39 @@ duplicados (otro punto a su favor).
 
 ### Tramo B — Modelado LSTM y veredicto (holdout + walk-forward)
 
-Diseno: LSTM pura, lookback 168h. Canal autorregresivo = precio con **lag-24**, que
-respeta el conjunto de informacion de la subasta dia-antes de OMIE (el precio mas fresco
-usable es el del dia anterior, no el de la hora anterior; coherente con que XGBoost use
-lag_24/lag_168). Exogenas D+1 (demanda_prevista_diaria, eolica_prevista_d1, solar) +
-festivo + calendario ciclico. Modelo simple (1 capa LSTM de 32 + Dense(1)), loss=MAE,
+Diseño: LSTM pura, lookback 168h. Canal autorregresivo = precio con **lag-24**, que
+respeta el conjunto de información de la subasta día-antes de OMIE (el precio más fresco
+usable es el del día anterior, no el de la hora anterior; coherente con que XGBoost use
+lag_24/lag_168). Exógenas D+1 (demanda_prevista_diaria, eolica_prevista_d1, solar) +
+festivo + calendario cíclico. Modelo simple (1 capa LSTM de 32 + Dense(1)), loss=MAE,
 early stopping. Escalado por fold (fit solo en train). Corrido en GPU (Colab).
 
-**Descubrimiento 9 - El holdout unico enganya; el walk-forward manda**
-En el holdout de 2026 (6 meses) el ensemble LSTM parecia batir a XGBoost (MAE 12,12 vs
-13,55, mismas horas). Pero el holdout solo medía el regimen reciente y favorable. El
+**Descubrimiento 9 — El holdout único engaña; el walk-forward manda**
+En el holdout de 2026 (6 meses) el ensemble LSTM parecía batir a XGBoost (MAE 12,12 vs
+13,55, mismas horas). Pero el holdout solo medía el régimen reciente y favorable. El
 walk-forward completo (30 meses, misma maquinaria que XGBoost, inicio=12, expanding) lo
-desmiente: **LSTM ensemble 16,59 ± 7,96 vs XGBoost 15,70 ± 5,29**. Leccion de metodo: un
-unico split puede mentir; el walk-forward es el juez.
+desmiente: **LSTM ensemble 16,59 ± 7,96 vs XGBoost 15,70 ± 5,29**. Lección de método: un
+único split puede mentir; el walk-forward es el juez.
 
-**Descubrimiento 10 - Varianza por semilla y el remedio del ensemble**
-Un LSTM suelto tiene ~7% de varianza de MAE solo por la semilla de inicializacion
+**Descubrimiento 10 — Varianza por semilla y el remedio del ensemble**
+Un LSTM suelto tiene ~7% de varianza de MAE solo por la semilla de inicialización
 (13,51 ± 0,91 sobre 4 semillas en el holdout; XGBoost es determinista). Promediar 4
 semillas (ensemble por averaging) baja el error por debajo de la mejor semilla individual
-y estabiliza. Se adopta el ensemble como artefacto reproducible. La varianza en si es un
-resultado: la inestabilidad es una desventaja practica frente al determinismo de XGBoost.
+y estabiliza. Se adopta el ensemble como artefacto reproducible. La varianza en sí es un
+resultado: la inestabilidad es una desventaja práctica frente al determinismo de XGBoost.
 
-**Descubrimiento 11 - La no-estacionariedad, otra vez, y mas fuerte en la LSTM**
-El ±7,96 del walk-forward es un modelo de dos mitades: catastrofico en primavera-2024
-(MAE 39/43/28 - el cambio de regimen post-crisis del gas, con solo 12-15 meses de
+**Descubrimiento 11 — La no-estacionariedad, otra vez, y más fuerte en la LSTM**
+El ±7,96 del walk-forward es un modelo de dos mitades: catastrófico en primavera-2024
+(MAE 39/43/28 — el cambio de régimen post-crisis del gas, con solo 12-15 meses de
 histórico) y sobresaliente en 2025-2026 (9-13, por debajo de la media de XGBoost en varios
-meses). La LSTM, anclada al histórico reciente, revienta en la transicion aun mas que
-XGBoost, pero DOMINA el regimen vigente. Es el mismo hilo de no-estacionariedad que
+meses). La LSTM, anclada al histórico reciente, revienta en la transición aún más que
+XGBoost, pero DOMINA el régimen vigente. Es el mismo hilo de no-estacionariedad que
 atraviesa todo el proyecto, ahora en la LSTM.
 
 **Veredicto Fase 5.2**
-En media, empate estadistico (16,59 vs 15,70; la diferencia 0,89 es menor que el error
-estandar ~1-1,5). En estabilidad, gana XGBoost (2/3 de la varianza) -> mejor modelo UNICO
-en produccion. Pero el ensemble LSTM es superior en el regimen reciente (2025-26) y queda
+En media, empate estadístico (16,59 vs 15,70; la diferencia 0,89 es menor que el error
+estándar ~1-1,5). En estabilidad, gana XGBoost (2/3 de la varianza) → mejor modelo ÚNICO
+en producción. Pero el ensemble LSTM es superior en el régimen reciente (2025-26) y queda
 como candidato fuerte para (a) el ensemble XGB+LSTM (Fase 5.4) y (b) el retraining
 adaptativo / ventana reciente (Bloque 10). XGBoost sigue siendo el punto de referencia (15,70).
 
@@ -841,20 +841,67 @@ comparar desde 2025 o excluir esas ciudades en el tramo imputado.
 
 ---
 
+## 2026-09-25 — Full-refresh de datos + primer análisis de drift limpio (Fase 9.1)
+
+**Full-refresh de las tres fuentes (motivo: hueco de verano 2026)**
+El dataset llegaba solo hasta junio 2026 (el pipeline no corrió el verano). Se re-ingirió el histórico completo
+(2023-01-01 → 2026-09-24) de OMIE, ESIOS y AEMET. Hallazgos y arreglos por el camino:
+- **OMIE**: descarga fichero a fichero (~1.365 días). El bucle original no tenía manejo de errores → un parpadeo
+  de red tiraba todo. Se blindó con `try/except` + `timeout` + registro de fallos, y luego **reanudable**
+  (`os.path.exists` salta lo ya descargado) + **circuit breaker** (aborta tras N fallos consecutivos). Lección:
+  un `requests.get` en bucle sin control es frágil; en producción, timeout + reintento + resumible + circuit
+  breaker. Quedan 3 días con 404 (OMIE no tiene fichero): al ser el precio, esos 3 días caen como no-entrenables.
+- **AEMET (bug importante)**: el notebook guardaba la tabla consolidada como `tabla_AEMT` (typo, falta una E),
+  pero `concatenacion.py` lee `tabla_AEMET`. Resultado: concat leía una versión **vieja** (sin verano) e ignoraba
+  la nueva. Un typo de una letra rompe el "contrato" del nombre de fichero **en silencio** — no da error, lee
+  datos viejos. Arreglado renombrando y corrigiendo el `to_csv` del notebook. Antídoto de fondo: definir la ruta
+  una sola vez en config e importarla, no escribirla a mano en cada lado.
+- Limpieza: se borraron celdas huérfanas de `df_solar` en el notebook de ESIOS (código muerto de una versión
+  anterior; el dato solar se ingiere bien y llega íntegro a `tabla_features`, verificado).
+
+Tras regenerar la cadena (concat → etl → features), `tabla_features` quedó completo: verano 2026 dentro
+(jul 744, ago 744), total 2026 = 6406 filas. Versionado con DVC y subido.
+
+**Primer análisis de drift LIMPIO (Fase 9.1)**
+Problema de diseño detectado antes: comparar referencia 2023-24 vs 2025+ mete un **artefacto estacional**
+(ventanas con meses distintos) que infla el drift. Solución: comparar **mismos meses entre años** →
+referencia = ene-sep 2025 (6408 filas) vs actual = ene-sep 2026 (6406 filas), alineadas por `dayofyear`.
+Bonus: en 2025 y 2026 Madrid/BCN son observaciones reales (no imputadas), así que también desaparece el
+artefacto de imputación. Extracción de resultados como **tabla de datos** desde el `snapshot` de Evidently
+(`.dict()['metrics']`), sin depender del HTML.
+
+**Validación del montaje (chequeo de sanidad clave):** las cíclicas de calendario (`hora_sin`, `mes_cos`,
+`festivo`...) salen con drift ≈ 0. El calendario es idéntico año a año, así que NO debe driftar — y no drifta.
+Esto **prueba** que la alineación por meses eliminó el artefacto estacional y que los números son fiables.
+
+**Resultado:** 73 de 102 columnas con drift (umbral Wasserstein normed 0.1). Interpretación:
+- **Demanda** el drift más fuerte (`demanda_prevista_diaria` 0.58, `demanda_prevista` 0.556) — estructural.
+- **Solar** (`solar_fv_prevista` 0.42) — coherente con el crecimiento del parque FV en España.
+- **Viento** (velmedia/racha de muchas estaciones, `eolica_prevista` 0.20) — variabilidad meteorológica natural
+  año a año, esperable, no alarma.
+- **Precio** (`precio_lag_24` 0.27, `precio_media_24` 0.25, `precio_lag_168` 0.21) — el target se ha movido.
+
+Nota metodológica: salieron MÁS columnas driftadas que en el montaje sucio anterior (73 vs 56), pero no es peor:
+son comparaciones distintas, y además al usar Madrid/BCN reales (antes imputadas y suavizadas) aflora drift que
+la imputación ocultaba. Datos mejores → drift más visible.
+
+**Lectura de negocio:** esto es *data drift* (cambió la distribución de entradas), no todavía *model drift*.
+Es alarma temprana: con demanda, solar y precio driftando, el modelo entrenado hasta 2025 probablemente se
+degrade en 2026 → indicio de reentrenamiento. Se confirmará en la Fase 9.2 (predicho vs real).
+
+
 ### Próximos pasos (orden de cierre)
 
-Estado: Fases 0–5 (modelado), Bloque 6 (interpretabilidad), Bloque 7 (MLflow+DVC), Fase 7 (serving) y Fase 8 (Prefect) ✅. Extensión del pipeline: concatenación y ETL modularizados y verificados; falta features + cableado completo.
+Estado: Fases 0–5 (modelado), Bloque 6 (interpretabilidad), Bloque 7 (MLflow+DVC), Fase 7 (serving), Fase 8 (Prefect: pipeline diario + reentrenamiento, concurrencia=1), extensión completa del pipeline (concat + ETL + features + cableado), contenerización (Docker + docker-compose), CI (GitHub Actions) y versionado con DVC ✅. Fase 9 (monitorización de drift con Evidently) en curso (ver entrada del 2026-09-21).
 
-1. **Docker + docker-compose + GitHub Actions (CI)** — contenerizar API + MLflow; automatizar lint+tests
-   en cada push. PRERREQUISITO antes del push a GitHub: `nbstripout` a los notebooks gigantes
-   (01_ingesta_esios ~157MB, aemet ~87MB) — GitHub rechaza >100MB.
-2. **Prefect (orquestación)** — flow de ingesta diaria (~13h, tras subasta) + flow de reentrenamiento.
-3. **Evidently (monitorización)** — data/model drift, predicho vs real diario, trigger de reentrenamiento;
+1. **Evidently (monitorización)** — data/model drift, predicho vs real diario, trigger de reentrenamiento;
    AQUÍ entra el **gating XGBoost↔LSTM por régimen** → requiere registrar el LSTM (`spotprice-lstm`) como
    custom pyfunc (prerequisito: exportar de Colab pesos de las 4 semillas + scaler + config de ventaneo).
-4. **Dashboard Streamlit** — predicción D+1 con intervalos; panel de drift; predicho vs real.
-5. **Docs MkDocs + README pulido** — arquitectura, decisiones, caso de negocio (€ ahorrados).
-6. **Al final:** economía/trading (P&L, Sharpe) y tuning con Optuna.
+2. **Dashboard Streamlit** — predicción D+1 con intervalos; panel de drift; predicho vs real.
+3. **Docs MkDocs + README pulido** — arquitectura, decisiones, caso de negocio (€ ahorrados).
+4. **Al final:** economía/trading (P&L, Sharpe) y tuning con Optuna.
 
 Cabos sueltos: opción B del `/predict` (por fecha); limpiar demanda/eolica GENÉRICAS del XGBoost a solo-D+1;
-gas MIBGAS/TTF como variable e indicador líder de crisis (limitación documentada).
+gas MIBGAS/TTF como variable e indicador líder de crisis (limitación documentada); verificar que los notebooks
+gigantes (`01_ingesta_esios` ~157MB, `01_ingesta_aemet` ~87MB) están fuera de git (`nbstripout` / `.gitignore`),
+ya que GitHub rechaza ficheros >100MB.
