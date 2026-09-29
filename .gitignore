@@ -38,6 +38,7 @@ notebooks/mlruns/
 data/raw/
 data/interim/
 data/processed/*.parquet
+data/monitoring
 
 # --- Carpeta de outputs del asistente ---
 Claude outputs/
