@@ -69,7 +69,7 @@ def ingesta_esios(inicio: str | None = None, fin: str | None = None):
     if inicio is None:
         hoy = date.today()
         inicio = (hoy - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
-        fin    = (hoy + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        fin    = f"{hoy + timedelta(days=1)}T23:59:59"
     tablas = []
     for nombre, id_ind in INDICADORES_PREDICTIVO.items():
         data = descargar_indicador(nombre, id_ind, inicio, fin)

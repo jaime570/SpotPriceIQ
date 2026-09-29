@@ -49,14 +49,40 @@ def guardar(tabla: pd.DataFrame) -> Path:
 
 
 @flow(name="ingesta-omie", log_prints=True)
-def ingesta_omie(fecha: str | None = None):
-    if fecha is None:
-        fecha = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
-    fichero = descargar_dia(fecha)
-    tabla = parsear(fichero)
-    ruta = guardar(tabla)
-    print(f"Guardado en {ruta}")
+def ingesta_omie(inicio: date | None = None, fin: date | None = None):
+    hoy = date.today()
+    if inicio is None:
+        inicio = hoy - timedelta(days=7)
+    if fin is None:
+        fin = hoy + timedelta(days=1)
+    rango_dias = pd.date_range(inicio, fin, freq="D")
+    tablas = []
+    for dia in rango_dias:
+        fecha_str= dia.strftime("%Y%m%d")
+        try:
+            fichero = descargar_dia(fecha_str)
+            tabla = parsear(fichero)
+            tablas.append(tabla)
+        except Exception:
+            if dia.date() == hoy + timedelta(days=1):
+                print(f"OMIE {fecha_str}: aún no publicado (normal antes de las 13h)")
+            else:
+                print(f"Omie no pudo descargar: {fecha_str}")
+    if tablas: 
+        tabla_final =pd.concat(tablas, ignore_index=True)
+        guardar(tabla_final)
+        print(f"se han guardado {len(tablas)} días")
+    else:
+        print("No se ha descargado ningún dia ")
 
 
 if __name__ == "__main__":
     ingesta_omie()
+
+
+
+
+            
+
+
+

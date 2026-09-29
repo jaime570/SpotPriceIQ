@@ -11,11 +11,8 @@ y el serving, de modo que todos entrenan y predicen con el mismo conjunto.
 # Prefijos de las variables meteo de AEMET (ya imputadas), compartidas por ambos modelos.
 _METEO_PREFIXES = ("tmed_", "tmax_", "velmedia_", "racha_", "prec_", "sol_")
 
-# Previsiones ESIOS GENÉRICAS: se refrescan intradía (nowcast) y el histórico guarda
-# la última versión, no la disponible al cierre de la subasta (12h D-1) -> leakage
-# suave + discrepancia train/serving. Se usan sus equivalentes D+1:
-# demanda_prevista_diaria (460) y eolica_prevista_d1 (1777). Ver diario 2026-09-25.
-_PREVISTAS_GENERICAS = ("demanda_prevista", "eolica_prevista")
+# "Solo previsiones verificadas como estables tras la subasta (fotos antes/después, sep-2026). Demanda 460 y solares 542/543 se revisan después → leakage. Ver diario."
+_PREVISTAS_D1 = ("eolica_prevista_d1",)  
 
 TARGET = "precio_espana"
 
@@ -44,8 +41,7 @@ def get_feature_sets(df):
     """
     meteo = get_meteo(df)
     meteo_lag = get_meteo_lag(df)
-    previstas = [c for c in df.columns[df.columns.str.contains("_prevista")]
-                 if c not in _PREVISTAS_GENERICAS]
+    previstas = [ c   for c in _PREVISTAS_D1  if c in df.columns ]
     reales = df.columns[df.columns.str.endswith("_real")].tolist()
     # Lags de precio: sin leakage (en D-1, tras la subasta, ya se conocen los
     # precios de ayer y de hace una semana). startswith evita capturar velmedia_*.
