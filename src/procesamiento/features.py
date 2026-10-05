@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import holidays
-from src.features.feature_sets import get_meteo
+from src.features.feature_sets import get_meteo,get_feature_sets
 
 PATH = Path(__file__).resolve().parents[2]
 PROCESSED = PATH / "data" / "processed"
@@ -114,10 +114,8 @@ def marcar_entrenable(df):
 
     """Marca las filas entrenables y completas de features"""
     df = df.copy()
-    excluir = ["precio_espana", "precio_portugal", "datetime_utc", "fecha"]
-    excluir += df.columns[df.columns.str.endswith("_real")].tolist()
-    features_validas = df.columns.drop(excluir)
-    df["completa_features"] = df[features_validas].notna().all(axis=1)
+    lista_features = get_feature_sets(df)["predictivo"]
+    df["completa_features"] = df[lista_features].notna().all(axis=1)
     df["entrenable"] = df["completa_features"] & df["precio_espana"].notna()
     return df
 

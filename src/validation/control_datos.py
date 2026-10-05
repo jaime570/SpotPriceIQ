@@ -88,6 +88,14 @@ def _columnas_esios() -> dict:
 # --------------------------------------------------------------------------- #
 # Esquema completo del warehouse                                               #
 # --------------------------------------------------------------------------- #
+def _precio_nulo_solo_en_cola(df):
+    """Permite precio_espana nulo SOLO en la cola (horas futuras a predecir):
+    todo precio nulo debe ser posterior al último precio conocido.
+    Un nulo en mitad del histórico (hueco de OMIE) hace fallar el contrato."""
+    
+    ultima_fecha_precio_conocido = df.loc[df["precio_espana"].notna(), "datetime_utc"].max()
+    fechas_sin_precio = df.loc[df["precio_espana"].isna(), "datetime_utc"]
+    return (fechas_sin_precio > ultima_fecha_precio_conocido).all()
 
 schema_warehouse = DataFrameSchema(
     {
@@ -96,8 +104,8 @@ schema_warehouse = DataFrameSchema(
         "datetime_utc": Column("datetime64[ns, UTC]", nullable=False, unique=True),
         # Fecha local (día): sin nulos
         "fecha": Column("datetime64[ns]", nullable=False),
-        # Target: sin nulos + rango físico generoso (deja margen a picos reales)
-        "precio_espana": Column(float, Check.in_range(-500, 4000), nullable=False),
+        # Target: solo nulos en cola + rango físico generoso (deja margen a picos reales)
+        "precio_espana": Column(float, Check.in_range(-500, 4000), nullable=True,),
 
         # --- Rango físico (nullable) ---------------------------------------
         # Precio de Portugal (MIBEL): puede faltar en congestión / ingesta
@@ -108,7 +116,9 @@ schema_warehouse = DataFrameSchema(
         **_columnas_aemet(),
     },
     strict=False,   # de momento no exigimos que estén SOLO estas columnas
-    coerce=False,   # no convertir tipos en silencio: queremos enterarnos si difieren
+    coerce=False,# no convertir tipos en silencio: queremos enterarnos si difieren
+    checks=[Check(_precio_nulo_solo_en_cola,                                         
+                  error="precio_espana nulo fuera de la cola (hueco en el histórico)")],
 )
 
 
@@ -194,3 +204,4 @@ def validar_cobertura() -> dict:
     if fallos:
         raise ValueError("Contrato de cobertura incumplido:\n- " + "\n- ".join(fallos))
     return resumen
+

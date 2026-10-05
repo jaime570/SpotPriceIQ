@@ -27,7 +27,7 @@ def test_marcar_entrenable():
         "fecha": ["2023-01-01", "2023-01-01"],
         "precio_espana": [50.0, 55.0],
         "precio_portugal": [48.0, 52.0],
-        "tmed_madrid": [10.0, np.nan],
+        "tmed_madrid_lag3d": [10.0, np.nan],
     })
     out = marcar_entrenable(df)
     assert out["entrenable"].iloc[0] == True

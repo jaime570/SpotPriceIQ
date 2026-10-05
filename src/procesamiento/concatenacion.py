@@ -65,6 +65,15 @@ def construir_datetime_esios(TABLA_ESIOS):
     df['datetime_utc'] = pd.to_datetime(df['datetime_utc'], utc=True)
     return df
 
+def añadir_horas_futuras(df_omie,df_esios):
+    """Añade al eje de OMIE las horas futuras que ya tienen previsión en ESIOS
+(sin precio), para que la tabla incluya las filas de D+1 que hay que predecir."""    
+    
+    fecha_maxima_omie = df_omie['datetime_utc'].max()
+    horas_futuras = df_esios[df_esios['datetime_utc'] > fecha_maxima_omie]
+    df_omie_ext = pd.concat([df_omie, horas_futuras[["datetime_utc"]]], ignore_index=True)
+    return(df_omie_ext)  
+
 def concatenar(df_omie, df_esios, df_aemet):
     tabla_final = df_omie.merge(df_esios, on='datetime_utc', how='left')
 
@@ -85,7 +94,8 @@ def construir_tabla_maestra():
     df_aemet_pivot = pivotar(TABLA_AEMET)
     df_omie = construir_datetime_omie(TABLA_OMIE)
     df_esios = construir_datetime_esios(TABLA_ESIOS)
-    tabla_final = concatenar(df_omie, df_esios, df_aemet_pivot)
+    df_omie_ext = añadir_horas_futuras(df_omie,df_esios)
+    tabla_final = concatenar(df_omie_ext, df_esios, df_aemet_pivot)
     return tabla_final
 
 if __name__ == "__main__":
