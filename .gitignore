@@ -48,3 +48,6 @@ Claude outputs/
 *.bak2
 # --- Reports generados (regenerables; no se versionan en Git) ---
 reports/*.html
+
+# --- Logs de las ejecuciones programadas (salida de script/run_*.bat) ---
+logs/
