@@ -9,7 +9,7 @@ import mlflow
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLA_FEATURES = ROOT / "data" / "processed" / "tabla_features.parquet"
-RUTA_REGISTRO = ROOT / "data" / "monitoring" / "predicciones_prueba.parquet"
+RUTA_REGISTRO = ROOT / "data" / "monitoring" / "predicciones.parquet"
 
 def seleccionar_filas_d1(df):
     """Devuelve las filas de D+1 listas para predecir (completas y sin precio). Lanza error si hay filas futuras incompletas o de más de un día."""
