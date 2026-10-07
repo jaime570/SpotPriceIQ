@@ -1,8 +1,8 @@
 import pandas as pd
 from pathlib import Path
 from src.features.feature_sets import get_feature_sets      
-from src.orquestacion.reentrenamiento import entrenar        
-from src.monitorizacion.evaluacion import metricas_dia, regret_dia  
+from src.orquestacion.reentrenamiento import entrenar         
+from src.monitorizacion.evaluacion import detectar_degradacion
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLA_FEATURES = ROOT / "data" / "processed" / "tabla_features.parquet"
@@ -81,25 +81,4 @@ def politica_trigger(dia, historial, reentrenos, umbral=1.3, umbral_sesgo=14,
     if (dia - reentrenos[-1]).days < enfriamiento:
         return False
 
-    por_dia = historial["fecha_objetivo"]
-
-    # MAE diario del modelo y del naive (error sin signo)
-    mae_dia = (historial["prediccion"] - historial["precio_real"]).abs().groupby(por_dia).mean()
-    naive_dia = (historial["naive_d1"] - historial["precio_real"]).abs().groupby(por_dia).mean()
-
-    # Sesgo diario (error CON signo): negativo = el modelo se queda corto
-    sesgo_dia = (historial["prediccion"] - historial["precio_real"]).groupby(por_dia).mean()
-
-    # Medias de 7 días de calendario (NaN hasta tener 5 días)
-    mae_semanal = mae_dia.rolling("7D", min_periods=5).mean()
-    naive_semanal = naive_dia.rolling("7D", min_periods=5).mean()
-    sesgo_semanal = sesgo_dia.rolling("7D", min_periods=5).mean()
-
-    ratio_semanal = mae_semanal / naive_semanal
-
-    # Alarma de cada día: alguna de las dos condiciones (| = "o" para Series)
-    alarma = (ratio_semanal > umbral) | (sesgo_semanal.abs() > umbral_sesgo)
-
-    # Reentrenar solo si la alarma lleva `dias_seguidos` días seguidos encendida
-    ultimos = alarma.tail(dias_seguidos)
-    return ultimos.all()
+    return detectar_degradacion(historial, umbral, umbral_sesgo, dias_seguidos)["alarma"]

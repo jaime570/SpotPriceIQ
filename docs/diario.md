@@ -1175,3 +1175,22 @@ hasta ~12-oct. Se decidió **calibrar y comparar con una simulación de producci
 cambio), o ponderar más los datos recientes.
 
 **Primera evaluación real (7-oct):** MAE 19,9 vs naive 28,7 (−31 %), coherente con lo esperado por la simulación.
+
+### Implementación en producción (7-oct)
+
+- **`src/orquestacion/reentrenamiento.py` reescrito con puerta de promoción:** `validar_candidato` (copia entrenada
+  sin los últimos 14 días y medida en ellos) → `entrenar` con todo → `registrar` en MLflow con `mae_val_14d` y
+  `mae_naive_val_14d` → si la validación gana al naive, `promover_y_exportar`: alias `@champion` + descarga a
+  `model_champion_nuevo/` + `model_meta.json` **con la lista de features** (el antiguo `export_model.py` no la
+  escribía y habría roto el `assert` de la predicción) + intercambio atómico de carpetas, dejando la versión previa
+  en `model_champion_anterior/` para poder volver atrás. La puerta es un guardarraíl (frena reentrenos rotos), no
+  una prueba de mejora: que reentrenar cada semana mejora ya lo demostró la simulación.
+- **Primer reentreno con la puerta: v10.** Validación 23-sep → 7-oct: MAE 26,4 vs naive 32,8 (−20 %) →
+  promocionada. Mismas 97 features que la v9; tests de la API en verde. Desde el 9-oct predice la v10.
+- **Programación:** `script/run_reentreno.bat` + tarea de Windows **lunes a las 10:00** (antes de la predicción
+  de las 11:15). `programar.py` (Prefect `serve`) se conserva como alternativa para Prefect Cloud / servidor propio;
+  en la nube el despertador será el cron de GitHub Actions y los flows de Prefect no cambian.
+- **Alarma de degradación:** la lógica del trigger se extrajo a `detectar_degradacion(cruzado)` en
+  `evaluacion.py` (fuente única: la usan `politica_trigger` en la simulación y `evaluar()` en producción). Cada
+  tarde el log muestra el ratio y el sesgo de 7 días y un aviso `ALARMA` si se cumplen 3 días seguidos. Hasta tener
+  5 días evaluados (~12-oct) los valores salen `nan`, como corresponde.

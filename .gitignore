@@ -30,6 +30,8 @@ mlflow.db
 mlruns/
 notebooks/mlflow.db
 notebooks/mlruns/
+model_champion_nuevo/
+model_champion_anterior/
 
 # --- Backups temporales ---
 *.bak_mlflow

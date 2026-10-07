@@ -75,6 +75,33 @@ def calcular_metricas(cruzado):
     return metricas
 
 
+def detectar_degradacion(cruzado, umbral=1.3, umbral_sesgo=14, dias_seguidos=3):
+    """Alarma de degradación del modelo (calibrada en la simulación de la 9.3):
+    salta si durante `dias_seguidos` días seguidos se cumple
+      - ratio MAE 7d modelo/naive > `umbral`, o
+      - |sesgo 7d| > `umbral_sesgo` €/MWh (el modelo falla siempre hacia el mismo lado).
+    Devuelve un dict con la decisión y los últimos valores, para poder registrarlos."""
+    por_dia = cruzado["fecha_objetivo"]
+    error = cruzado["prediccion"] - cruzado["precio_real"]
+
+    mae_dia = error.abs().groupby(por_dia).mean()
+    naive_dia = (cruzado["naive_d1"] - cruzado["precio_real"]).abs().groupby(por_dia).mean()
+    sesgo_dia = error.groupby(por_dia).mean()
+
+    mae_7d = mae_dia.rolling("7D", min_periods=5).mean()
+    naive_7d = naive_dia.rolling("7D", min_periods=5).mean()
+    sesgo_7d = sesgo_dia.rolling("7D", min_periods=5).mean()
+    ratio_7d = mae_7d / naive_7d
+
+    alarma_dia = (ratio_7d > umbral) | (sesgo_7d.abs() > umbral_sesgo)
+
+    return {
+        "alarma": bool(alarma_dia.tail(dias_seguidos).all()),
+        "ratio_7d": float(ratio_7d.iloc[-1]),
+        "sesgo_7d": float(sesgo_7d.iloc[-1]),
+    }
+
+
 def evaluar(ruta_registro=RUTA_REGISTRO):
     """Evalúa todos los días completos del registro y guarda la tabla diaria.
     Recalcula la tabla entera cada vez (idempotente)."""
@@ -95,6 +122,12 @@ def evaluar(ruta_registro=RUTA_REGISTRO):
     metricas.to_parquet(RUTA_EVALUACION)   # sin index=False: el índice es la fecha
 
     print(f"Evaluación guardada: {len(metricas)} días | {RUTA_EVALUACION}")
+    
+    estado = detectar_degradacion(cruzado)
+    print(f"Degradación: ratio 7d {estado['ratio_7d']:.2f} | sesgo 7d {estado['sesgo_7d']:+.1f} €")
+    if estado["alarma"]:
+        print("ALARMA: el modelo se está degradando (ratio o sesgo fuera de umbral 3 días seguidos). "
+              "Revisar: ¿cambio de nivel de precios? ¿datos? El reentreno semanal puede no bastar.")
     return metricas
 
 
