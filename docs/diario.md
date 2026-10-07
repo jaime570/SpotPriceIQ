@@ -962,3 +962,216 @@ explicativo del código.
 de otro periodo) y `baseline_walkforward.parquet` llega solo a jun-2026 (30 meses) → las tablas por año de
 las celdas 10/12 mezclan periodos en 2026 (expanding hasta jun, rolling hasta sep). Arreglo: re-ejecutar el
 notebook 05 y calcular el naive de la celda 17 sobre el mismo `test`.
+
+
+---
+
+## 2026-09-25 → 2026-09-29 — Auditoría *point-in-time* de las features + champion v9
+
+**Pregunta.** El walk-forward controla el orden entre filas (nunca se entrena con el futuro), pero no el
+*contenido* de cada fila. ¿Cada feature del día D contiene solo lo que de verdad se sabía a las **12:00 de D-1**
+(cierre de la subasta)? Si no, hay leakage aunque el backtest sea impecable, y además desajuste entre
+entrenamiento y servicio: en producción esa información no existe a la hora de predecir.
+
+**Hallazgos (notebook `11_auditoria_point_in_time.ipynb`):**
+
+1. **Previsiones ESIOS genéricas** (544, 541): se refrescan intradía. Ya retiradas el 25-sep (entrada anterior).
+2. **Meteorología del mismo día.** Las variables AEMET son *observaciones* del día D y AEMET las publica con
+   ~2 días de retraso: a las 12h de D-1 no existen. Arreglo: `añadir_lags_meteo(df, dias=3)` en
+   `src/procesamiento/features.py` → media diaria desplazada 3 días (`*_lag3d`); el set predictivo usa solo
+   `get_meteo_lag` y la meteo del mismo día queda fuera.
+3. **Previsiones que se revisan después de la subasta.** La ingesta de ESIOS guarda con `keep="last"`, es decir, la
+   *última* versión de cada previsión, no la disponible a las 12h. Para saber cuáles cambian se hicieron "fotos"
+   de ESIOS a distintas horas (`script/check_publicacion_esios.py` → `data/monitoring/check_esios/`):
+   - **Eólica D+1 (1777):** publicada hacia las 10:50 y estable después de la subasta (25, 28 y 30-sep) → se queda.
+   - **Demanda diaria (460) y solares (542, 543):** actualizadas después del cierre (30-sep, 12:23 y 12:41) → fuera.
+
+**Arreglo en la fuente de verdad (`src/features/feature_sets.py`).** Se pasa de lista negra a **lista blanca**
+(seguro por defecto): `_PREVISTAS_D1 = ("eolica_prevista_d1",)`, solo previsiones verificadas. Tests en
+`tests/test_feature_sets.py`: el predictivo no puede contener las previsiones prohibidas y solo usa meteo
+retrasada. `marcar_entrenable` se calcula sobre el set predictivo.
+
+**Ingesta y tabla maestra.** OMIE y ESIOS descargan una ventana reciente (7 días atrás hasta D+1) con deduplicado
+(idempotente y autorreparable). `añadir_horas_futuras` extiende la tabla maestra con las horas de D+1 que ya
+tienen previsión en ESIOS (sin precio): son las filas "a predecir". Contrato pandera: `precio_espana` solo
+puede ser nulo **en la cola** (horas futuras), nunca en un hueco del histórico.
+
+**Reentrenamiento y un bug propio.** Ablación en el notebook 06 (cambiar una sola cosa cada vez) con la función
+`evaluar_set`. La variable del bucle de la ablación (`feats`) **se filtró** al resto del notebook y la v8 se
+entrenó con 96 features en vez de 97. Arreglo: renombrar la variable (`lista`) + `assert` del número de
+features antes de entrenar y registrar → **v9 @champion, 97 features**.
+
+| Modelo | Features | MAE walk-forward (€/MWh) | Comentario |
+|---|---|---|---|
+| v1 | 102 | 15,70 | con previsiones genéricas y meteo del mismo día (leakage), 30 folds |
+| v6 | 100 | 16,14 | solo previsiones D+1, 33 folds |
+| **v9** | **97** | **16,49** | **point-in-time limpio** (meteo D-3, solo eólica D+1) |
+| naive D-1 | — | 18,61 | baseline |
+
+**Lectura.** El error *sube* de 15,70 a 16,49, y eso es lo correcto: la diferencia era leakage. El modelo sigue
+mejorando al naive en un 11 %, ahora con un número que se puede reproducir en producción. Exportado a
+`model_champion/` con `mae_wf_ref = 16,49` en `model_meta.json`.
+
+**Lección.** Un backtest bien hecho no garantiza ausencia de leakage: hay que preguntar, feature por feature,
+*¿esto se sabía a la hora de predecir?*, y comprobarlo con datos (fotos de la fuente), no por suposición.
+
+---
+
+## 2026-09-30 → 2026-10-06 — Fase 9.2: predicho vs real en producción (predicción diaria, evaluación y programación)
+
+**Objetivo.** Pasar de "el modelo funciona en el backtest" a "el modelo funciona cada día en producción": predecir
+D+1 **antes de la subasta** (cierre 12:00 D-1), guardar la predicción, cruzarla con el precio real cuando OMIE lo
+publica (~13h) y medir el error día a día. Es la base de la 9.3 (trigger de reentrenamiento).
+
+### Piezas B y C — `src/monitorizacion/prediccion.py` (predicción D+1 + registro)
+
+- `seleccionar_filas_d1`: filas **completas y sin precio** (las horas futuras que añade `añadir_horas_futuras`).
+  Si hay filas futuras incompletas → `ValueError` con las columnas vacías (falla ruidoso, no silencioso); si no
+  hay ninguna → aviso y fin (OMIE ya publicó); si hay más de un día → error.
+- `predecir`: carga `model_champion/` (el mismo artefacto que sirve la API) y **comprueba con `assert` que las
+  features del modelo coinciden con `get_feature_sets`** (protege contra entrenar con un set y servir con otro).
+- `construir_registro`: una fila por hora con `prediccion`, `naive_d1` (= `precio_lag_24` **en el momento de
+  predecir**, para comparar modelo y naive en igualdad de condiciones), `modelo_version`, `run_id` y
+  `momento_prediccion` (UTC).
+- `guardar_registro`: append + `drop_duplicates(keep="first")` → **la primera predicción (la de antes de la
+  subasta) nunca se sobrescribe**. Esto hace seguro relanzar el flujo varias veces.
+
+### Pieza D — `src/monitorizacion/evaluacion.py` (evaluación diaria)
+
+- `cruzar_con_real`: merge `how="left"` con el precio real y se queda solo con **días completos**, comparando
+  horas *predichas* (`size`) con horas *con real* (`count`) por día — no contra 24 fijo, así que funciona con
+  los días de cambio de hora (23/25 h).
+- `metricas_dia`: `mae_modelo`, `mae_naive`, `mae_forma` (MAE tras restar la media del día a predicción y real:
+  ¿acierta el *dibujo* del día aunque falle el nivel?) y `spearman` (¿ordena bien las horas?).
+- `regret_dia(k)`: coste económico de elegir mal las horas. Compra = precio real medio de las K horas que el
+  modelo cree más baratas − el de las K realmente más baratas; venta, al revés. Siempre ≥ 0; 0 = horas perfectas.
+  K = 1, 2, 4 (duraciones típicas de baterías).
+- `evaluar`: `groupby(fecha).apply`, medias móviles `rolling("7D"/"30D")` **por días de calendario** (si falta un
+  día la ventana no se estira) con `min_periods` 5 y 20 (NaN hasta tener datos suficientes: una "media de 7 días"
+  con 1 día engaña). Recalcula la tabla entera cada vez (idempotente) → `data/monitoring/evaluacion_diaria.parquet`.
+  Si aún no existe el registro, avisa y termina sin error.
+
+**Primera lectura (30-sep, registro de prueba):** MAE 52,4 vs naive 67,6 (−22 %); MAE de forma 49,8; Spearman
+0,845. Regret de compra 0 con K=1/2/4 (clava las horas baratas); regret de venta 69 / 47 / 0 €/MWh (acierta el
+grupo de 4 horas caras, falla el pico exacto). Desviación típica predicción 82 vs real 60: ese día el modelo
+**exageró** la amplitud. La hipótesis previa ("XGBoost suaviza extremos") quedó **refutada por el dato** — un solo
+día, pendiente de ver si es sistemático (candidata a métrica: ratio `std_pred/std_real`).
+
+### Pieza E — programación automática (mañana / tarde)
+
+- Flows `src/orquestacion/prediccion_manana.py` (`pipeline_diario` como subflow → predicción) y
+  `src/orquestacion/evaluacion_tarde.py` (`pipeline_diario` → evaluación). La mañana no puede ir a la hora de la
+  ingesta antigua (14h): a esa hora OMIE ya publicó D+1 y no queda nada que predecir.
+- Lanzadores `script/run_manana.bat` / `run_tarde.bat`: `cd` a la raíz, crean `logs/`, `PYTHONIOENCODING=utf-8`,
+  `PREFECT_PROFILE=ephemeral`, ruta completa de `python.exe`, salida a `logs/*.log`.
+- Programador de tareas de Windows: mañana 11:15 + 11:40 + al iniciar sesión; tarde 14:30 + al iniciar sesión.
+  Los disparadores redundantes son seguros por diseño (`keep="first"` y evaluación idempotente).
+- `programar.py` queda solo con el reentrenamiento semanal (`Cron(..., timezone="Europe/Madrid")`; sin zona,
+  Prefect interpreta el cron en UTC).
+- Decisión: **local primero, nube después** (GitHub Actions + DVC en remoto en la nube), para no perder días de
+  predicción mientras se monta la versión cloud.
+
+### Incidencias y lecciones (lo que más se aprendió)
+
+1. **Prefect sin servidor.** El perfil `local` apunta a `127.0.0.1:4200`; con el servidor cerrado → `Failed to
+   reach API`. La primera prueba "funcionó" solo porque había un servidor abierto en otra terminal. Solución:
+   perfil `ephemeral` (`PREFECT_SERVER_ALLOW_EPHEMERAL_MODE=true`) que levanta un servidor temporal por run.
+   Lección: **probar en las condiciones reales** (todo cerrado, lanzado por el planificador).
+2. **Control de aplicaciones de Windows** bloqueó la DLL de `ujson` (dependencia opcional de fastapi, importada
+   vía mlflow) → `ImportError`. Solución: `pip uninstall ujson` (fastapi cae al `json` estándar).
+3. **La tarea de las 11:15 no se lanzó el 6-oct** (`LastTaskResult 267011` = nunca ejecutada; probablemente PC
+   suspendido). Solución: disparadores redundantes + historial del Programador activado.
+4. **Ruta equivocada + pérdida + recuperación.** `RUTA_REGISTRO` apuntaba a `predicciones_prueba.parquet`; la
+   primera predicción real se guardó ahí, y una celda **no idempotente** para separarla, ejecutada dos veces,
+   dejó el registro real vacío. Recuperación **determinista**: `tabla_features` estaba intacta desde las 11:53:38
+   (momento exacto de la predicción) → mismo modelo v9 + mismas features = mismas predicciones (las 4 horas más
+   baratas coinciden al decimal con el log) y se restauró el `momento_prediccion` original del log. Lecciones:
+   las celdas que escriben ficheros deben comprobar antes de escribir; los logs con la salida son el seguro.
+5. **CI en rojo desde el 21-sep** sin que nadie lo viera: `pandera` y `holidays` no estaban en
+   `requirements.txt`. Lección: **mirar *Actions* después de cada push**.
+
+### Decisiones descartadas
+- **Backfill 30-sep → 5-oct:** pospuesto; aporta 6 días reconstruidos, mientras que los días en vivo son
+  irrecuperables si se pierden → prioridad a que no falle ninguno.
+- **Columna `origen` (en vivo / backfill):** innecesaria; `momento_prediccion` ya delata si una predicción se hizo
+  antes de la subasta.
+
+### Hito
+**Primera predicción real en producción: 7-oct-2026**, modelo v9, hecha a las 11:53:59 (antes del cierre). Perfil
+esperado de octubre: valle solar 12-15h (119-134 €/MWh) y picos al amanecer y anochecer (7-8h y 19-20h, ~203-214).
+Primera evaluación real automática del 7-oct (OMIE publica el precio de D el día D-1 hacia las 13h). La tarea de las 14:30 del 6-oct no saltó (PC suspendido) y Windows la recuperó a las 03:36 del 7-oct: como la evaluación es idempotente, el retraso no cambia nada. **Resultado 7-oct: MAE 19,9 vs naive 28,7 (−31 %), MAE de forma 16,9, Spearman 0,84; regret de venta 0 con K=1 y 2 (clava el pico), regret de compra 23 / 9,5 / 11,9 €/MWh con K=1/2/4.** El 7-oct por la mañana la tarea de las 11:15 funcionó sola por primera vez (predicción del 8-oct a las 11:17).
+
+**Siguiente:** 9.3 — trigger de reentrenamiento, con umbrales calibrados sobre el walk-forward (la media de 7 días
+real no existe hasta ~12-oct).
+
+
+---
+
+## 2026-10-07 — Fase 9.3: ¿cuándo reentrenar? Simulación de producción con cuatro políticas
+
+**Pregunta.** El holdout mostró que un modelo congelado pierde contra el naive cuando el precio cambia de nivel
+(verano de 2026). ¿Con qué regla hay que reentrenar? La primera idea era un *trigger* (reentrenar solo cuando el
+error se degrada), pero sus umbrales no se pueden calibrar con el registro real: la media de 7 días no existe
+hasta ~12-oct. Se decidió **calibrar y comparar con una simulación de producción** sobre 2025-01-01 → 2026-10-05.
+
+### Diseño (`src/monitorizacion/simulacion.py`, notebook `12_trigger_reentrenamiento.ipynb`)
+
+- `simular(df, politica, inicio, fin)`: recorre los días uno a uno; para cada día D pregunta a la política si
+  reentrena (el primer día siempre), entrena **solo con `fecha < D`** (point-in-time), predice las 24 h de D con
+  `predecir_dia_sim` y lo guarda. Los días sin datos se saltan (8 huecos oct-dic 2025, tras el cambio de OMIE a
+  cuartohorario). Respeta los días de 23/25 h.
+- **Mismo entrenamiento que producción** (`entrenar.fn` de `reentrenamiento.py`) y **mismas métricas que
+  producción**: se refactorizó `evaluacion.py` separando el cálculo (`calcular_metricas(cruzado)`, sin ficheros)
+  de la entrada/salida (`evaluar()`), así producción y simulación usan exactamente el mismo código.
+- Las políticas son funciones intercambiables con la misma firma `(dia, historial, reentrenos) → bool`:
+  `politica_congelado` (nunca), `politica_mensual` (día 1), `politica_semanal` (lunes) y `politica_trigger`.
+- Comprobaciones de fiabilidad: el MAE del naive es idéntico en todas las políticas (mismos días) y el mensual
+  (16,26) cuadra con el walk-forward mensual (16,49).
+
+### Calibración del trigger (y lo que enseñó)
+
+- **El ratio MAE 7d modelo/naive no basta.** Incluso el modelo mensual "sano" pierde contra el naive el **24 %** de
+  las semanas (percentil 90 del ratio = 1,24; congelado: 41 %, p90 = 1,55): el naive es muy ruidoso. Umbral elegido
+  1,3 con 3 días seguidos y 7 días de enfriamiento. Aun así saltó tarde en el verano de 2026 (1-sep).
+- **Por qué tarde: en un cambio de nivel el naive también empeora**, así que el ratio se queda en 1,0-1,2 aunque el
+  error en euros se duplique. La señal que sí lo ve es el **sesgo** (media del error *con signo*): se hunde a −10 €
+  en julio y −15 € en agosto (el modelo infrapredice todos los días). Trigger final: ratio 7d > 1,3 **o**
+  |sesgo 7d| > 14 € (p90 del mensual) durante 3 días seguidos → detecta el verano el 20-ago (12 días antes).
+
+### Resultado: comparación de las cuatro políticas (2025-01-01 → 2026-10-05, ~635 días)
+
+| Política | Reentrenos | MAE | Mejora vs naive (19,19) | MAE verano 2026 | Sesgo verano 2026 | Spearman | Regret compra / venta K4 |
+|---|---|---|---|---|---|---|---|
+| Congelado | 1 | 18,68 | −2,6 % | 31,58 | −15,72 | 0,88 | 2,64 / 3,35 |
+| Mensual | 22 | 16,26 | −15,3 % | 21,05 | −7,27 | 0,88 | 2,33 / 3,31 |
+| **Semanal** | **93** | **15,90** | **−17,2 %** | **18,68** | **−4,63** | 0,88 | 2,43 / 3,12 |
+| Trigger | 18 | 16,46 | −14,2 % | 21,36 | −7,78 | 0,88 | 2,33 / 3,29 |
+
+### Conclusiones
+
+1. **Reentrenar con más frecuencia es mejor en todo**, y sobre todo en el episodio difícil (verano: 31,6 → 18,7).
+   Sin reentreno, el modelo casi deja de aportar frente al naive (−2,6 %).
+2. **El reentreno frecuente mitiga el sesgo de un cambio de nivel** (−15,7 → −7,3 → −4,6), aunque no lo elimina:
+   XGBoost no extrapola por encima de lo visto, así que un *único* reentreno ayuda poco (tras el 1-sep el sesgo
+   seguía en −12/−20), pero reentrenar cada semana hace que el modelo "suba" con el nivel. Corrige una afirmación
+   previa ("reentrenar no arregla el sesgo"), que era exagerada.
+3. **El trigger no compensa cuando reentrenar es barato.** Iguala al mensual (16,46 vs 16,26) con 18 reentrenos en
+   vez de 22, a cambio de complejidad y reacción tardía. Un trigger tiene sentido cuando reentrenar es caro (modelos
+   grandes, validación humana); aquí cada reentreno cuesta segundos. Comportamiento cualitativo correcto, eso sí:
+   0 reentrenos en 7 meses estables (jun-2025 → ene-2026) y ráfagas en los periodos turbulentos.
+4. **Hallazgo de negocio: la degradación es de nivel, no de forma.** Spearman 0,88 y regret K4 prácticamente
+   iguales en las cuatro políticas: incluso congelado 21 meses, el modelo sigue sabiendo **qué horas** serán
+   baratas o caras. Para una batería (decide por orden) el modelo sigue sirviendo; para quien necesita el precio
+   exacto (tarifas, ofertas), reentrenar es imprescindible.
+
+### Decisión para producción
+- **Reentreno semanal por calendario** (lunes), con **puerta de promoción**: el candidato solo pasa a `@champion` y
+  se exporta a `model_champion/` si mejora al actual en las semanas recientes.
+- **El trigger se mantiene como alarma** (no como disparador) en la evaluación de la tarde: avisa en el log de una
+  degradación persistente (ratio o sesgo) que el reentreno semanal no esté corrigiendo.
+
+**Línea de mejora del modelo (no del MLOps):** para reducir el sesgo estructural en cambios de nivel, predecir la
+*diferencia* respecto al precio de ayer en lugar del precio (el nivel lo aporta el naive y el árbol aprende el
+cambio), o ponderar más los datos recientes.
+
+**Primera evaluación real (7-oct):** MAE 19,9 vs naive 28,7 (−31 %), coherente con lo esperado por la simulación.
