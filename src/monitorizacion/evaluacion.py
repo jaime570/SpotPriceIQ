@@ -51,11 +51,33 @@ def regret_dia(dia, k):
 
     return pd.Series({"regret_compra": regret_compra, "regret_venta": regret_venta})
 
-def evaluar(ruta_registro=RUTA_REGISTRO):
-    """Evalúa todos los días completos del registro: una fila por día con las
-    métricas de error, el regret para K = 1, 2 y 4 y medias móviles de 7 y 30
-    días. Recalcula la tabla entera cada vez (idempotente) y la guarda."""
+def calcular_metricas(cruzado):
+    """Métricas por día (error, regret K=1/2/4) y medias móviles de 7 y 30 días.
+    Solo calcula: no lee ni guarda ficheros (sirve para producción y para simulación)."""
+    # Solo las columnas que usan las métricas: evita el aviso de pandas
+    # por pasar la columna de agrupación dentro del apply.
+    columnas = ["prediccion", "naive_d1", "precio_real"]
+    por_dia = cruzado.groupby("fecha_objetivo")[columnas]
 
+    metricas = por_dia.apply(metricas_dia)
+
+    for k in (1, 2, 4):
+        regret = por_dia.apply(regret_dia, k=k).add_suffix(f"_k{k}")
+        metricas = metricas.join(regret)
+
+    # Medias móviles por días de CALENDARIO ("7D"), no por filas: si falta un día,
+    # la ventana sigue siendo de 7 días reales. min_periods deja NaN hasta que haya
+    # días suficientes (una "media de 7 días" con 1 día engaña).
+    for col in ["mae_modelo", "mae_naive"]:
+        metricas[f"{col}_7d"] = metricas[col].rolling("7D", min_periods=5).mean()
+        metricas[f"{col}_30d"] = metricas[col].rolling("30D", min_periods=20).mean()
+
+    return metricas
+
+
+def evaluar(ruta_registro=RUTA_REGISTRO):
+    """Evalúa todos los días completos del registro y guarda la tabla diaria.
+    Recalcula la tabla entera cada vez (idempotente)."""
     if not Path(ruta_registro).exists():
         print(f"No existe el registro de predicciones: {ruta_registro}")
         return None
@@ -67,24 +89,14 @@ def evaluar(ruta_registro=RUTA_REGISTRO):
         print("Ningún día completo que evaluar (¿falta el precio real en tabla_features?)")
         return None
 
-    columnas = ["prediccion", "naive_d1", "precio_real"]
-    por_dia = cruzado.groupby("fecha_objetivo")[columnas]
-
-    metricas = por_dia.apply(metricas_dia)
-
-    for k in (1, 2, 4):
-        regret = por_dia.apply(regret_dia, k=k).add_suffix(f"_k{k}")
-        metricas = metricas.join(regret)
-
-    for col in ["mae_modelo", "mae_naive"]:
-        metricas[f"{col}_7d"] = metricas[col].rolling("7D", min_periods=5).mean()
-        metricas[f"{col}_30d"] = metricas[col].rolling("30D", min_periods=20).mean()
+    metricas = calcular_metricas(cruzado)
 
     RUTA_EVALUACION.parent.mkdir(parents=True, exist_ok=True)
     metricas.to_parquet(RUTA_EVALUACION)   # sin index=False: el índice es la fecha
 
     print(f"Evaluación guardada: {len(metricas)} días | {RUTA_EVALUACION}")
     return metricas
+
 
 if __name__ == "__main__":
     evaluar()
