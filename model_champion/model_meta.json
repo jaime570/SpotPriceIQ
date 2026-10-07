@@ -1,9 +1,12 @@
 {
   "model_name": "spotprice-xgboost",
   "alias": "champion",
-  "version": 9,
-  "run_id": "5fc6885defe147a7b030a094f5b879e4",
-  "mae_wf_ref": 16.49267725123142,
+  "version": 10,
+  "run_id": "5c68d76d085343eba276353ad7b65467",
+  "mae_val": 26.41712522398101,
+  "mae_naive_val": 32.83924999999999,
+  "validacion_desde": "2026-09-23",
+  "entrenado_hasta": "2026-10-07",
   "features": [
     "eolica_prevista_d1",
     "tmed_alcazar_de_san_juan_lag3d",
