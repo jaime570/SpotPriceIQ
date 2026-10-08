@@ -41,6 +41,19 @@ def predicho_vs_real(registro, precio_real):
         ["hora_madrid", "fecha_objetivo", "prediccion", "naive_d1", "precio_real"]
     ]
 
+def con_huecos(df):
+    """Rellena con NaN las horas que faltan entre la primera y la última de `df`,
+    para que los gráficos de líneas se CORTEN en los días sin predicción (p. ej.
+    el 9-oct) en vez de unirlos con una recta que parecería una predicción inventada.
+
+    El rango se genera con hora_madrid (zona horaria incluida): pd.date_range cuenta
+    horas reales, así que el 25-oct salen 25 horas y en marzo 23, sin casos especiales.
+    Requiere que `hora_madrid` no tenga duplicados (lo garantiza keep="first" del registro)."""
+    
+    df = df.set_index("hora_madrid")
+    rango = pd.date_range(df.index.min(), df.index.max(), freq="h")
+    return df.reindex(rango).reset_index(names="hora_madrid")
+
 
 def cargar_datos(ruta_registro=RUTA_REGISTRO, ruta_evaluacion=RUTA_EVALUACION,
                  ruta_features=TABLA_FEATURES):

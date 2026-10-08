@@ -8,7 +8,7 @@ import pandas as pd
 
 
 from src.dashboard.datos import (
-    RUTA_EVALUACION, RUTA_REGISTRO, TABLA_FEATURES, cargar_datos, ultima_prediccion,
+    RUTA_EVALUACION, RUTA_REGISTRO, TABLA_FEATURES, cargar_datos, ultima_prediccion,predicho_vs_real,con_huecos
 )
 
 st.set_page_config(page_title="SpotPriceIQ", layout="wide")
@@ -57,11 +57,60 @@ c1.metric("Precio medio", f"{media:.2f} €/MWh")
 c2.metric(f"Precio mínimo · {hora_min:%H:%M}", f"{precio_min:.2f} €/MWh")
 c3.metric(f"Precio máximo · {hora_max:%H:%M}", f"{precio_max:.2f} €/MWh")
 
-grafico = ult.rename(columns={"hora_madrid": "hora", "prediccion": "Modelo", "naive_d1": "Naive (Precio ayer)"})
+grafico = ult.rename(columns={"hora_madrid": "Hora", "prediccion": "Modelo", "naive_d1": "Naive (Precio ayer)"})
 
 st.line_chart(
     grafico,
-    x="hora",
+    x="Hora",
     y=["Modelo", "Naive (Precio ayer)"],
     color=["#4C9BE8", "#9AA0A6"],
 )
+
+st.subheader("Predicho vs real")
+pvr = predicho_vs_real(registro, precio_real)
+primera_fecha = pvr["fecha_objetivo"].min().date()
+ultima_fecha = pvr["fecha_objetivo"].max().date()
+
+rango = st.date_input("Periodo", value=(primera_fecha, ultima_fecha), min_value=primera_fecha, max_value=ultima_fecha)
+if len(rango) != 2:
+    st.info("Elige la fecha final del periodo")
+    st.stop()
+
+inicio, fin = rango
+
+filtro = (pvr["fecha_objetivo"].dt.date.between(inicio, fin))
+grafico_pvr = con_huecos(pvr[filtro]).rename(columns={"hora_madrid": "Hora", "precio_real": "Precio OMIE", "prediccion": "Modelo", "naive_d1": "Naive (Precio ayer)"})
+
+st.line_chart(
+    grafico_pvr,
+    x="Hora",
+    y=["Modelo", "Naive (Precio ayer)", "Precio OMIE"],
+    color=["#4C9BE8", "#9AA0A6", "#F0A04B"]
+)
+
+
+if evaluacion is None:
+    st.info("Aún no se ha ejecutado la evaluación diaria (14:30).")
+else:
+    filtro_evaluacion = (evaluacion.index.date >= inicio) & (evaluacion.index.date <= fin)
+    mae_dias=evaluacion[filtro_evaluacion].rename(columns={"mae_modelo": "Modelo", "mae_naive": "Naive (Precio ayer)"})
+    st.markdown("**Error medio diario (MAE, €/MWh)**: más bajo es mejor")
+    mae_m = mae_dias["Modelo"].mean()
+    mae_n = mae_dias["Naive (Precio ayer)"].mean()
+    mae_dias = mae_dias.assign(Día=mae_dias.index.strftime("%d-%m"))
+    st.bar_chart(
+        mae_dias,
+        x="Día",
+        y=["Modelo", "Naive (Precio ayer)"],
+        color=["#4C9BE8", "#9AA0A6"],
+        stack=False,
+    )
+    st.caption(f"Periodo: modelo {mae_m:.1f} · naive {mae_n:.1f} €/MWh "
+               f"({(mae_m / mae_n - 1) * 100:+.0f} %)")
+    
+    st.bar_chart(
+        mae_dias,
+        y=["Modelo", "Naive (Precio ayer)"],
+        color=["#4C9BE8", "#9AA0A6"],
+        stack=False
+    )
