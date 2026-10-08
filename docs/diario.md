@@ -1194,3 +1194,97 @@ cambio), o ponderar más los datos recientes.
   `evaluacion.py` (fuente única: la usan `politica_trigger` en la simulación y `evaluar()` en producción). Cada
   tarde el log muestra el ratio y el sesgo de 7 días y un aviso `ALARMA` si se cumplen 3 días seguidos. Hasta tener
   5 días evaluados (~12-oct) los valores salen `nan`, como corresponde.
+
+---
+
+## 2026-10-08 — Incidente de producción, puerta horaria, salud del modelo persistida y dashboard (Fase 10, secciones 1-3)
+
+### Incidente: sin predicción para el 9-oct
+
+- Las ejecuciones de las 11:15 y 11:40 **no llegaron a arrancar** (ninguna cabecera `=====` en `logs/manana.log`):
+  el equipo estaba suspendido. La de "al iniciar sesión" (12:45) terminó con `LastTaskResult = 3221225786`
+  = `0xC000013A` (**STATUS_CONTROL_C_EXIT**): se cerró a mano la ventana de consola y Python murió sin escribir nada.
+- **Decisión: el 9-oct queda como hueco y no se rellena.** A las 12:55 la subasta ya estaba cerrada: una
+  predicción D+1 posterior al cierre no sirve para pujar, la eólica prevista de ESIOS ya habría sido revisada
+  (información posterior al cierre) y, con `keep="first"`, contaminaría para siempre el histórico de producción.
+  Un hueco documentado es honesto; un relleno a posteriori no.
+- Diagnóstico útil: `Get-ScheduledTask -TaskName "SpotPriceIQ*" | Get-ScheduledTaskInfo` (`267011` = nunca
+  ejecutada, `267009` = en curso, `0xC000013A` = ventana cerrada).
+
+### Puerta horaria en `prediccion_manana.py`
+
+- El fallo de fondo: el disparador "al iniciar sesión" podía predecir **después** de la subasta sin que nada lo
+  impidiera. Ahora el flow comprueba la hora **en `Europe/Madrid`** (no UTC, para que el límite siga siendo "las 12
+  en España" con el cambio de hora): no arranca pasadas las **11:50** y, si la ingesta se alarga, no guarda la
+  predicción pasadas las **12:00**. Fuera de hora termina `Completed` con un WARNING (no predecir es lo correcto,
+  no un fallo). Probado a las 13:02: WARNING y `predicciones.parquet` intacto.
+- Programador de tareas (las tres tareas, desde PowerShell de administrador): `WakeToRun` (despierta el equipo),
+  `StartWhenAvailable` (recupera ejecuciones perdidas; seguro **solo** gracias a la puerta horaria) y sin
+  restricción de batería. Requiere "Permitir temporizadores de reactivación" en las opciones de energía.
+- Nota: ejecutar un flow a mano desde PowerShell exige `$env:PREFECT_PROFILE="ephemeral"` (los `.bat` lo ponen);
+  sin él Prefect busca un servidor en `127.0.0.1:4200` y falla.
+
+### La salud del modelo se guarda por día (`evaluacion.py`)
+
+- Hueco detectado: `detectar_degradacion` calculaba ratio, sesgo y alarma pero **solo los imprimía**; el sesgo no
+  se guardaba en ningún sitio, aunque es justo la métrica del hallazgo de la 9.3 (degradación de nivel).
+- Ahora `metricas_dia` añade `sesgo` (error con signo, + = el modelo predice por encima) y `calcular_metricas`
+  añade `sesgo_7d`, `ratio_7d`, `condicion_alarma` y `alarma` por día en `evaluacion_diaria.parquet`. Se hizo en la
+  función **pura** (`calcular_metricas`), no en `evaluar()`: testeable sin ficheros y reutilizable por la simulación.
+- **Una sola regla:** umbrales como constantes de módulo (`UMBRAL_RATIO`, `UMBRAL_SESGO`, `DIAS_SEGUIDOS`) y
+  condición en `_alarma_por_dia`, compartida por `calcular_metricas` y `detectar_degradacion` (que se conserva
+  porque la usa `simulacion.py`; sus cifras no cambian). `evaluar()` lee el estado de la última fila en vez de
+  recalcularlo. Primera ejecución en producción: 8-oct 17:58, correcta.
+
+### v9 → v10
+
+- La predicción del 8-oct salió con **v9** porque se hizo el 7-oct a las 11:17 y la v10 se exportó a las 14:18.
+  Verificado: alias `@champion` = v10 en MLflow y `model_champion/model_meta.json` = v10. La primera predicción con
+  v10 será la del 10-oct. Ojo: los `model_meta.json` de v9 (export manual) y v10 (reentreno) no tienen las mismas
+  claves (`mae_wf_ref` solo en v9) → leer con `.get()` donde se usen.
+
+### Dashboard (Fase 10): diseño
+
+- **Solo lectura:** el dashboard nunca predice, recalcula ni escribe. Si volviera a predecir enseñaría algo distinto
+  de lo registrado (rompe el point-in-time). Toda la lógica vive en `src/`.
+- **`src/dashboard/datos.py`** (sin Streamlit, testeable): `cargar_datos` (rutas como parámetro con las de
+  producción por defecto; de `tabla_features` solo 2 columnas con `columns=`, parquet es columnar),
+  `ultima_prediccion` (`.max()`, no `[-1]`, para no depender del orden), `predicho_vs_real` (reutiliza
+  `cruzar_con_real`), `_con_hora_madrid` (único sitio que convierte zona horaria) y `con_huecos` (reindexa a todas
+  las horas con `pd.date_range`, que cuenta horas reales: el 25-oct tendrá 25).
+- **Se guarda en UTC y se muestra en hora de Madrid como timestamp** (no como entero de hora): la 02:00 repetida
+  del 25-oct son dos instantes distintos (+02:00 y +01:00) y no se pisan.
+- **`src/dashboard/app.py`**: caché `@st.cache_data` cuya clave es la fecha de modificación de los ficheros, para que
+  se refresque sola tras las 11:15 y las 14:30. Se lanza desde la raíz con
+  `python -m streamlit run src/dashboard/app.py` (`python -m` añade la raíz al `sys.path`; sin hacks).
+
+### Dashboard: lo construido
+
+1. **Mañana (D+1):** fecha, modelo y hora de la predicción (todo del registro, nunca de `model_meta.json`, que hoy es
+   v10 mientras la predicción mostrada es v9); precio medio/mínimo/máximo con su hora; curva de 24 h modelo vs naive;
+   4 horas más baratas y más caras; y "fiabilidad reciente" (mediana de los últimos días **evaluados** de Spearman y
+   regret K=4, con `n` visible y "orientativo" si n < 5). El Spearman del día mostrado no se puede calcular (su
+   precio real aún no existe), por eso se usa el historial.
+2. **Predicho vs real:** selector de rango; líneas real/modelo/naive que **se cortan en los huecos** (`con_huecos`)
+   en vez de inventar una recta; barras de MAE diario con eje de **categorías** (con eje temporal las barras eran
+   instantes sin anchura) y resumen del periodo (hoy: modelo 27,3 vs naive 52,1, −48 %).
+3. **Salud del modelo:** semáforo de 4 estados. El de **pocos datos va primero**: con `NaN` las condiciones dan
+   `False` y el panel decía "todo bien" sin saber nada; un monitor que da confianza falsa es peor que no tenerlo.
+   Ratio y sesgo 7d con su umbral, y gráficos con líneas de umbral (columna constante) y huecos por `asfreq("D")`.
+   Tendrá valores desde la evaluación del sábado 11-oct (5 días evaluados: 7, 8, 10, 11, 12).
+
+### Hallazgo: precios a cero el 8-oct
+
+El precio real se hundió a ~0 €/MWh de 10:00 a 17:00 (excedente solar). El modelo predijo un valle de 35-70 € y el
+naive ~90 €: los dos acertaron la **forma** pero ninguno llegó al suelo. Explica el día: sesgo +25 €, MAE 34,6
+(naive 75,5) y aun así Spearman 0,91. Es la degradación de *nivel, no de forma* de la 9.3, vista en un día real, y
+el argumento de negocio del proyecto: para quien decide **cuándo** consumir o cargar, el orden de las horas importa
+más que el nivel.
+
+### Limitaciones y pendientes
+
+- La regla "3 días seguidos" cuenta días **evaluados**: con huecos, el 8 y el 10 cuentan como consecutivos.
+- El regret sin referencia es un número huérfano: falta el **regret del naive** en `calcular_metricas` (para la
+  sección 4).
+- Pendiente: sección 4 (negocio), aviso de frescura ("última predicción hace X h"), tests de `datos.py`
+  (`con_huecos`, cambio de hora, `cargar_datos` sin evaluación), servicio en `docker-compose.yml` y GIF (~20-oct).
