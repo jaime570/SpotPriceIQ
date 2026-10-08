@@ -4,11 +4,12 @@ Lanzar desde la raíz del proyecto:  python -m streamlit run src/dashboard/app.p
 (python -m añade la raíz al sys.path, por eso funciona `from src...`)."""
 
 import streamlit as st
-import pandas as pd
+import pandas as pd 
+from src.monitorizacion.evaluacion import DIAS_SEGUIDOS, UMBRAL_RATIO, UMBRAL_SESGO
 
 
 from src.dashboard.datos import (
-    RUTA_EVALUACION, RUTA_REGISTRO, TABLA_FEATURES, cargar_datos, ultima_prediccion,predicho_vs_real,con_huecos
+    RUTA_EVALUACION, RUTA_REGISTRO, TABLA_FEATURES, cargar_datos, ultima_prediccion,predicho_vs_real,con_huecos,
 )
 
 st.set_page_config(page_title="SpotPriceIQ", layout="wide")
@@ -150,3 +151,57 @@ else:
         color=["#4C9BE8", "#9AA0A6"],
         stack=False
     )
+
+
+# ─────────────────────────── Sección 3 · Salud del modelo ───────────────────────────
+st.subheader("Salud del modelo")
+
+if evaluacion is None:
+    st.info("Aún no hay evaluación (se genera a las 14:30).")
+else:
+    ultimo = evaluacion.iloc[-1]
+    n_dias = len(evaluacion)
+
+    # 3a · Semáforo: el caso "pocos datos" va PRIMERO (con NaN no se puede afirmar nada).
+    if pd.isna(ultimo["ratio_7d"]):
+        st.info(f"La alarma necesita 5 días evaluados (hay {n_dias}). "
+                "Hasta entonces no se puede afirmar nada sobre la salud del modelo.")
+    elif ultimo["alarma"]:
+        st.error(f"ALARMA: ratio o sesgo fuera de umbral {DIAS_SEGUIDOS} días seguidos. "
+                 "Revisar: ¿cambio de nivel de precios? ¿datos? El reentreno semanal puede no bastar.")
+    elif ultimo["condicion_alarma"]:
+        st.warning(f"Fuera de umbral hoy (ratio > {UMBRAL_RATIO} o |sesgo| > {UMBRAL_SESGO} €). "
+                   f"Vigilando: la alarma salta a los {DIAS_SEGUIDOS} días seguidos.")
+    else:
+        st.success("Modelo dentro de umbrales.")
+
+    # 3b · Valores actuales con su umbral al lado.
+    c1, c2 = st.columns(2)
+    if pd.isna(ultimo["ratio_7d"]):
+        c1.metric(f"Ratio MAE 7d modelo/naive (umbral {UMBRAL_RATIO})", "—")
+        c2.metric(f"Sesgo 7d (umbral ±{UMBRAL_SESGO} €/MWh)", "—")
+    else:
+        c1.metric(f"Ratio MAE 7d modelo/naive (umbral {UMBRAL_RATIO})", f"{ultimo['ratio_7d']:.2f}")
+        c2.metric(f"Sesgo 7d (umbral ±{UMBRAL_SESGO} €/MWh)", f"{ultimo['sesgo_7d']:+.1f} €/MWh")
+    st.caption("Ratio < 1: el modelo se equivoca menos que el naive. "
+               "Sesgo > 0: predice por encima del precio real; < 0: por debajo.")
+
+    # 3c · Evolución con la línea de umbral (solo si ya hay algún valor).
+    # asfreq("D") añade los días sin evaluación como NaN -> la línea se corta en los huecos.
+    salud = evaluacion[["ratio_7d", "sesgo_7d"]].asfreq("D")
+    if salud["ratio_7d"].notna().any():
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown("**Ratio MAE 7d** (por encima de la línea = peor que el naive × umbral)")
+            st.line_chart(
+                salud[["ratio_7d"]].assign(umbral=UMBRAL_RATIO)
+                .rename(columns={"ratio_7d": "Ratio 7d", "umbral": "Umbral"}),
+                color=["#4C9BE8", "#E5534B"],
+            )
+        with g2:
+            st.markdown("**Sesgo 7d (€/MWh)** (fuera de la banda = error sistemático)")
+            st.line_chart(
+                salud[["sesgo_7d"]].assign(sup=UMBRAL_SESGO, inf=-UMBRAL_SESGO)
+                .rename(columns={"sesgo_7d": "Sesgo 7d", "sup": "Umbral +", "inf": "Umbral −"}),
+                color=["#4C9BE8", "#E5534B", "#E5534B"],
+            )
