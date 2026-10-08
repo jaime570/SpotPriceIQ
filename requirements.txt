@@ -7,3 +7,4 @@ pandas==2.3.3
 pyarrow==22.0.0
 pandera==0.32.1
 holidays==0.103
+streamlit==1.58.0
