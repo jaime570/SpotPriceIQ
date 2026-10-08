@@ -66,6 +66,42 @@ st.line_chart(
     color=["#4C9BE8", "#9AA0A6"],
 )
 
+#tabla de las 4 horas más baratas y 4 más caras, con hora y precio previsto
+def _tabla_horas(df):
+    """Hora (texto HH:MM) y precio predicho, listo para mostrar."""
+    return pd.DataFrame({
+        "Hora": df["hora_madrid"].dt.strftime("%H:%M"),
+        "Precio previsto (€/MWh)": df["prediccion"].round(2),
+    })
+
+baratas = ult.nsmallest(4, "prediccion").sort_values("hora_madrid")
+caras = ult.nlargest(4, "prediccion").sort_values("hora_madrid")
+
+col_b, col_c = st.columns(2)
+with col_b:
+    st.markdown("**4 horas más baratas** · consumir / cargar")
+    st.dataframe(_tabla_horas(baratas), hide_index=True, use_container_width=True)
+with col_c:
+    st.markdown("**4 horas más caras** · evitar / vender")
+    st.dataframe(_tabla_horas(caras), hide_index=True, use_container_width=True)
+
+
+#  Fiabilidad reciente de la lista: historial, NO el día mostrado (su precio real aún no existe).
+if evaluacion is not None:
+    recientes = evaluacion.tail(7)          # últimos 7 días EVALUADOS (no de calendario)
+    n = len(recientes)
+    spearman = recientes["spearman"].median()
+    regret_c = recientes["regret_compra_k4"].median()
+    regret_v = recientes["regret_venta_k4"].median()
+    aviso = " · orientativo, pocos datos" if n < 5 else ""
+    st.caption(
+        f"Fiabilidad reciente (mediana de los últimos {n} días evaluados{aviso}): "
+        f"orden de las horas Spearman {spearman:.2f} · comprando en sus 4 horas más baratas "
+        f"se pagó {regret_c:.1f} €/MWh más que en las 4 mejores reales · vendiendo en las "
+        f"4 más caras, {regret_v:.1f} €/MWh menos que en las 4 mejores."
+    )
+
+
 st.subheader("Predicho vs real")
 pvr = predicho_vs_real(registro, precio_real)
 primera_fecha = pvr["fecha_objetivo"].min().date()
