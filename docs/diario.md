@@ -1288,3 +1288,63 @@ más que el nivel.
   sección 4).
 - Pendiente: sección 4 (negocio), aviso de frescura ("última predicción hace X h"), tests de `datos.py`
   (`con_huecos`, cambio de hora, `cargar_datos` sin evaluación), servicio en `docker-compose.yml` y GIF (~20-oct).
+
+---
+
+## 2026-10-09 → 2026-10-10 — Primeros días con v10, retraso de OMIE y primer día que gana el naive
+
+### Operación
+
+- **9-oct:** la tarea de las 11:15 arrancó sola con el equipo despierto (primer día con `WakeToRun`) →
+  predicción del 10-oct con **v10** (la primera). A las 14:30 OMIE aún no había publicado el precio del 10-oct
+  (404) y la evaluación se quedó en 2 días: no se pierde nada (la evaluación es idempotente y recalcula todo), solo
+  se retrasa un día.
+- **Segundo disparador de la evaluación a las 16:30** para cubrir los días en que OMIE publica tarde. Detalle de
+  cambio de hora: `New-ScheduledTaskTrigger` lo guardó como `16:30:00+02:00` (instante fijo, "sincronizar entre
+  zonas horarias") → tras el 25-oct habría saltado a las 15:30 locales. Se dejó en hora local (`...T16:30:00`), como
+  el de las 14:30. La tarea de la tarde no tenía disparador "al iniciar sesión" (lo cubre `StartWhenAvailable`).
+- **10-oct (sábado):** predicción del 11-oct lanzada a mano a las 11:06 (antes de la puerta de las 11:50, por tanto
+  legítima) porque el portátil no iba a estar encendido a las 11:15. Evaluación: **3 días** (7, 8 y 10; el 9 es hueco).
+- Recordatorio operativo: la ejecución necesita **internet** (OMIE, ESIOS, AEMET). Sin conexión a las 11:15 no hay
+  predicción ese día; la evaluación se recupera sola en la siguiente ejecución con red.
+
+### 10-oct: el naive gana claramente al modelo
+
+- El precio real se fue a **~0 €/MWh de 10:00 a 17:00** (excedente solar), igual que el 9-oct. El naive (precio de
+  ayer) **heredó** esos ceros y acertó; el modelo (v10) dibujó el valle pero se quedó en ~40-60 €. Fuera del
+  mediodía los tres están cerca (de noche el real algo por encima de ambos).
+- **Por qué el modelo no llega a cero:**
+  1. No ve la solar del día siguiente: la previsión solar de ESIOS se excluyó en la auditoría point-in-time (se
+     revisa tras la subasta) y la meteo entra con `_lag3d`. No puede anticipar un mediodía de sobreproducción; el
+     naive tampoco, pero lo hereda si el día anterior fue igual.
+  2. XGBoost promedia hojas y las horas a 0 € son raras en el histórico de otoño → suaviza los extremos.
+- **Lectura:** un solo día, no se cambia nada. El 7 y el 8 el modelo ganó con claridad (19,9 vs 28,7; 34,6 vs 75,5).
+  En un régimen de varios días seguidos con precios a cero, la persistencia es muy difícil de batir. Para eso están
+  el ratio 7d y la alarma: decidir con varios días, no con uno.
+- **Refuerza la mejora nº 7 del roadmap: predecir la diferencia respecto al naive.** El modelo partiría de los ceros
+  de ayer y solo aprendería a corregirlos, en vez de tener que "descubrir" el cero. Este día es el argumento para
+  justificarlo en el TFM (validar siempre con walk-forward antes de adoptarlo).
+- Pendiente: anotar el MAE exacto del 10-oct (modelo vs naive) desde las barras de la sección 2 del dashboard, y
+  vigilar si el ratio 7d se acerca a 1,3 si siguen los días soleados.
+
+**Actualización 10-oct (noche) — evaluación con 4 días.** MAE diario modelo / naive (€/MWh; 10 y 11 leídos del
+gráfico de barras, aproximados):
+
+| Día | Modelo | Naive | Gana |
+|---|---|---|---|
+| 7-oct | 19,9 | 28,7 | modelo |
+| 8-oct | 34,6 | 75,5 | modelo |
+| 10-oct | ~36 | ~23 | naive |
+| 11-oct | ~18 | ~11 | naive |
+| **Media 4 días** | **~27** | **~35** | modelo (ratio ~0,79) |
+
+- Dos días seguidos ganando el naive: es un **régimen** (días soleados con ceros a mediodía), no una anécdota.
+- **Matiz de la métrica:** el ratio de medias (MAE 7d modelo / MAE 7d naive) está dominado por el 8-oct, donde el
+  naive se estrelló (75,5). Mientras ese día siga en la ventana de 7 días (hasta el ~15-oct), el ratio quedará por
+  debajo de 1 aunque el naive gane los días recientes (en 10 y 11 el modelo tiene ~1,5× el error del naive). La
+  señal que antes lo verá es el **sesgo 7d** (positivo: el modelo predice por encima en los valles a cero).
+- **Lunes 12-oct, reentreno:** el candidato se valida en los últimos 14 días y debe ganar al naive. Si el naive
+  domina los días recientes, puede **no pasar la puerta** y v10 seguiría de champion → revisar `logs/reentreno.log`.
+- No se toca el modelo con 4 días de datos; el plan sigue siendo el de la mañana (medir el peso de las horas a cero
+  en el histórico → features de régimen + objetivo como diferencia respecto al naive, con walk-forward), y solo
+  tras lo imprescindible.
