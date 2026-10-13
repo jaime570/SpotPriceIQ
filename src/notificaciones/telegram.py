@@ -13,13 +13,21 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[2]
 
 
+MAX_TELEGRAM = 4000  # Telegram rechaza mensajes > 4096 caracteres; dejamos margen
+
+
 def avisar(texto: str) -> bool:
-    """Envía `texto` a tu chat de Telegram. Devuelve True si se envió."""
+    """Envía `texto` a tu chat de Telegram. Devuelve True si se envió.
+    Recorta mensajes largos (p. ej. el informe completo de pandera) para que
+    Telegram no los rechace: el detalle completo sigue en el log."""
     load_dotenv(ROOT / ".env")
     token = (os.getenv("TELEGRAM_TOKEN") or "").strip().strip("'")
     chat_id = (os.getenv("TELEGRAM_CHAT_ID") or "").strip().strip("'")
     if not token or not chat_id:
         return False  # sin configurar: no avisa, pero tampoco falla
+
+    if len(texto) > MAX_TELEGRAM:
+        texto = texto[:MAX_TELEGRAM] + "\n… (recortado, detalle completo en el log)"
 
     try:
         r = requests.post(

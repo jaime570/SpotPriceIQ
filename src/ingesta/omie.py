@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+
 from prefect import flow, task
+from src.notificaciones.telegram import avisar
 
 RAW = Path(__file__).resolve().parents[2] / "data" / "raw" / "omie"
 INTERIM = Path(__file__).resolve().parents[2] / "data" / "interim"
@@ -57,8 +59,9 @@ def ingesta_omie(inicio: date | None = None, fin: date | None = None):
         fin = hoy + timedelta(days=1)
     rango_dias = pd.date_range(inicio, fin, freq="D")
     tablas = []
+    fallidos = []   # días PASADOS que no se pudieron descargar (el de mañana no cuenta: es normal)
     for dia in rango_dias:
-        fecha_str= dia.strftime("%Y%m%d")
+        fecha_str = dia.strftime("%Y%m%d")
         try:
             fichero = descargar_dia(fecha_str)
             tabla = parsear(fichero)
@@ -68,8 +71,14 @@ def ingesta_omie(inicio: date | None = None, fin: date | None = None):
                 print(f"OMIE {fecha_str}: aún no publicado (normal antes de las 13h)")
             else:
                 print(f"Omie no pudo descargar: {fecha_str}")
-    if tablas: 
-        tabla_final =pd.concat(tablas, ignore_index=True)
+                fallidos.append(fecha_str)
+
+    if fallidos:
+        avisar(f"⚠️ Ingesta OMIE: no se pudieron descargar {len(fallidos)} días pasados: "
+               f"{', '.join(fallidos)}. ¿Sin red u OMIE caído?")
+
+    if tablas:
+        tabla_final = pd.concat(tablas, ignore_index=True)
         guardar(tabla_final)
         print(f"se han guardado {len(tablas)} días")
     else:
