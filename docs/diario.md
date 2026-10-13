@@ -1348,3 +1348,68 @@ gráfico de barras, aproximados):
 - No se toca el modelo con 4 días de datos; el plan sigue siendo el de la mañana (medir el peso de las horas a cero
   en el histórico → features de régimen + objetivo como diferencia respecto al naive, con walk-forward), y solo
   tras lo imprescindible.
+
+---
+
+## 2026-10-11 — Primeros valores de salud y plan de trabajo futuro (después del TFM)
+
+- **Primeros valores del panel de salud** (5 días evaluados: 7, 8, 10, 11, 12; la predicción del 12 se guardó a las
+  11:48, tras un primer intento a las 10:31 que falló porque ESIOS aún no había publicado `eolica_prevista_d1` → el
+  contrato de `seleccionar_filas_d1` se negó a predecir con un hueco, como debe). **Ratio 7d 0,68** (inflado por el
+  8-oct, donde el naive se estrelló) y **sesgo 7d +5,0 €** (positivo: el modelo se queda alto en los valles solares
+  a cero). Semáforo verde. Lectura: sin error sistemático grave, pero con una tendencia clara en las horas solares.
+- Los gráficos de ratio/sesgo no muestran la línea azul con un solo valor (una línea necesita 2 puntos). Mejora
+  futura: Altair con `mark_line(point=True)` para que un valor aislado entre huecos también se vea.
+- Idea para la sección 4: "días ganados al naive en los últimos 7" (más legible que el ratio de medias).
+- Recordatorio: la mañana solo tiene el disparador de las 11:15; añadir el de **11:40** (hora local, sin `+02:00`)
+  como reintento por si ESIOS publica tarde.
+
+### Trabajo futuro (después del TFM): que el modelo vea la solar de mañana
+
+Causa de fondo de los valles mal predichos: el modelo no tiene información solar *point-in-time* del día siguiente.
+Vías, de más barata a más cara:
+
+1. **Comprobar si la previsión solar D+1 de ESIOS se revisa de verdad** (casi gratis): descargar el indicador exacto
+   a las 11:15 y por la tarde durante unos días (como `check_publicacion_esios.py`). Si no cambia tras las 12:00, es
+   utilizable con todo su histórico y la decisión de la auditoría se podría revisar para ese indicador.
+2. **Archivar versiones ("vintages") desde ya:** en la ingesta de las 11:15, guardar una foto con fecha de descarga
+   de la previsión solar de ESIOS y de la meteo prevista de AEMET (p. ej. `data/raw/vintages/…`). Point-in-time por
+   construcción; solo sirve a partir del día en que se empieza, por eso conviene empezar pronto.
+3. **Histórico de previsiones meteorológicas tal como se emitieron** (p. ej. APIs de "ejecuciones anteriores" de
+   modelos meteo, como la de Open-Meteo): radiación/nubosidad prevista con 1-2 días de antelación. A verificar:
+   cobertura temporal y geográfica, y que la antelación encaje con el corte de las 12:00 del día anterior.
+4. **ENTSO-E Transparency** (previsión eólica y solar del día siguiente por país). A verificar la hora de
+   publicación para España: si es posterior a las 12:00, tiene el mismo problema que ESIOS.
+
+Complementos de modelado (validar siempre con walk-forward y midiendo **por régimen**: días con ceros vs normales):
+- **Medir primero** cuántas horas a ~0 € hay en el histórico y qué parte del MAE aportan.
+- **Features de régimen de ceros** (seguras: solo precios pasados): `precio_lag_24 < 1`, horas a ~0 ayer y en los
+  últimos 3 días, mínimo a esa hora en 7 días.
+- **Objetivo como diferencia respecto al naive** (mejora nº 7): hereda los ceros y ataca el sesgo de nivel.
+- **LSTM** como experimento con hipótesis ("en régimen de ceros reduce el MAE de las horas solares frente a
+  XGBoost"), comparado con el XGBoost *mejorado*, no con el básico. En la Fase 5 no superó a XGBoost; un modelo más
+  potente no arregla la falta de información solar. Si gana solo en un régimen → *gating* por régimen.
+
+### Decidido: alertas por Telegram (antes de la congelación del 25-oct, tras sección 4 + aviso de frescura)
+
+- Bot de Telegram (@BotFather → token + chat_id en `.env`, nunca en el repo) y función `avisar(texto)` en `src/`
+  (un POST HTTPS con `requests`). **Opcional**: sin token no hace nada, para que el CI siga funcionando.
+- Enganche con hooks `on_failure` de Prefect en los tres flows (mañana, tarde, reentreno).
+- Mensajes: ❌ fallo de flow (pandera, ESIOS, red…), ⚠️ puerta horaria (sin predicción), 🚨 alarma de degradación,
+  ℹ️ resultado del reentreno, ✅ **predicción hecha** con las horas baratas/caras.
+- El ✅ es el *heartbeat*: si el portátil está apagado o sin red no puede avisar del fallo; lo que lo delata es que
+  **no llegue** el mensaje de éxito a las ~11:30.
+
+---
+
+## 2026-10-12 → 2026-10-13 — Segundo hueco (13-oct), reentreno recuperado y champion v11
+
+- **12-oct:** sin predicción (portátil sin conexión a la hora) → **el 13-oct queda como hueco**, como el 9-oct.
+- **10-oct 19:09:** al encender, Windows recuperó la tarea de la mañana (`StartWhenAvailable`) y la **puerta horaria
+  la paró** ("Son más de las 11:50…"): el caso para el que se diseñó, comprobado en producción.
+- **Reentreno:** el del lunes 10:00 no pudo ejecutarse; Windows lo recuperó el **martes 13 a las 11:30** al encender.
+  Validación 28-sep → 12-oct: MAE modelo **33,02** vs naive **38,72** → supera la puerta → **v11 promocionada** a
+  `@champion` y exportada. Primer modelo entrenado con los días de ceros solares.
+- **13-oct 11:32:** predicción del 14-oct lanzada a mano antes de la puerta (con v11).
+- Lección: dos huecos en una semana por portátil apagado/sin red. Refuerza el aviso de frescura en el dashboard, el
+  *heartbeat* por Telegram y, a medio plazo, la versión en la nube (GitHub Actions con cron), que no depende del portátil.

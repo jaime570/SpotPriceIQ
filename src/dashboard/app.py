@@ -6,7 +6,7 @@ Lanzar desde la raíz del proyecto:  python -m streamlit run src/dashboard/app.p
 import streamlit as st
 import pandas as pd 
 from src.monitorizacion.evaluacion import DIAS_SEGUIDOS, UMBRAL_RATIO, UMBRAL_SESGO
-
+from src.orquestacion.prediccion_manana import MARGEN_INICIO
 
 from src.dashboard.datos import (
     RUTA_EVALUACION, RUTA_REGISTRO, TABLA_FEATURES, cargar_datos, ultima_prediccion,predicho_vs_real,con_huecos,
@@ -38,7 +38,20 @@ ult = ultima_prediccion(registro)
 dia_objetivo = ult["fecha_objetivo"].iloc[0]
 modelo = f"v{ult['modelo_version'].iloc[0]}"
 momento = ult["momento_prediccion"].iloc[0].tz_convert("Europe/Madrid")
+ahora = pd.Timestamp.now(tz="Europe/Madrid")
 
+if ahora.time() < MARGEN_INICIO:
+    esperado =ahora.date()
+else:
+    esperado= ahora.date() + pd.Timedelta(days=1) 
+
+ultimo=dia_objetivo.date()
+
+if ultimo >= esperado:
+    st.success(f"Predicción al día · última: {ultimo:%d-%m} (hecha el {momento:%d-%m a las %H:%M})")
+else:
+    st.warning(f"Falta la predicción del {esperado:%d-%m}. Última disponible: {ultimo:%d-%m}")
+    
 st.subheader(f"Predicción para el {dia_objetivo:%d-%m-%Y}")
 
 st.caption(f"Modelo {modelo} · predicho el {momento:%d-%m-%Y a las %H:%M}")
