@@ -48,22 +48,26 @@ def metricas_dia(dia):
                       "mae_forma": mae_forma, "spearman": spearman})
 
 
-def regret_dia(dia, k):
-    """Regret de compra y venta de un día completo para las K horas elegidas."""
-    horas_baratas_modelo = dia.nsmallest(k, "prediccion")
-    pagado_modelo = horas_baratas_modelo["precio_real"].mean()
+def regret_dia(dia, k, col="prediccion"):
+    """Regret de compra y venta de un día completo para las K horas elegidas según `col`.
+
+    col="prediccion" (por defecto) → regret del modelo (comportamiento de siempre).
+    col="naive_d1"                 → regret del naive: elegir las horas según el precio de ayer.
+    Sirve de referencia: un regret del modelo solo es "bueno" si es menor que el del naive.
+    El óptimo siempre se calcula con el precio real."""
+    horas_baratas_elegidas = dia.nsmallest(k, col)
+    pagado_elegidas = horas_baratas_elegidas["precio_real"].mean()
     horas_baratas_reales = dia.nsmallest(k, "precio_real")
     pagado_optimo = horas_baratas_reales["precio_real"].mean()
-    regret_compra = pagado_modelo - pagado_optimo
+    regret_compra = pagado_elegidas - pagado_optimo
 
-    horas_caras_modelo = dia.nlargest(k, "prediccion")
-    venta_modelo = horas_caras_modelo["precio_real"].mean()
+    horas_caras_elegidas = dia.nlargest(k, col)
+    venta_elegidas = horas_caras_elegidas["precio_real"].mean()
     horas_caras_reales = dia.nlargest(k, "precio_real")
     venta_optimo = horas_caras_reales["precio_real"].mean()
-    regret_venta = venta_optimo - venta_modelo
+    regret_venta = venta_optimo - venta_elegidas
 
     return pd.Series({"regret_compra": regret_compra, "regret_venta": regret_venta})
-
 
 def _alarma_por_dia(ratio_7d, sesgo_7d, umbral=UMBRAL_RATIO, umbral_sesgo=UMBRAL_SESGO,
                     dias_seguidos=DIAS_SEGUIDOS):
@@ -90,7 +94,8 @@ def calcular_metricas(cruzado):
 
     for k in (1, 2, 4):
         regret = por_dia.apply(regret_dia, k=k).add_suffix(f"_k{k}")
-        metricas = metricas.join(regret)
+        regret_naive = por_dia.apply(regret_dia, k=k, col="naive_d1").add_suffix(f"_naive_k{k}")
+        metricas = metricas.join(regret).join(regret_naive)
 
     # Medias móviles por días de CALENDARIO ("7D"), no por filas: si falta un día,
     # la ventana sigue siendo de 7 días reales. min_periods deja NaN hasta que haya
