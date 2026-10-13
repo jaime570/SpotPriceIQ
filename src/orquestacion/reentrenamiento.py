@@ -22,6 +22,7 @@ from prefect import flow, task
 from xgboost import XGBRegressor
 
 from src.features.feature_sets import TARGET, get_feature_sets
+from src.notificaciones.telegram import avisar, aviso_fallo
 
 ROOT = Path(__file__).resolve().parents[2]
 DB = (ROOT / "mlflow.db").as_posix()
@@ -128,7 +129,7 @@ def promover_y_exportar(version: str, feats: list, validacion: dict) -> None:
     nueva.rename(CARPETA_CHAMPION)
 
 
-@flow(name="reentrenamiento", log_prints=True)
+@flow(name="reentrenamiento", log_prints=True, on_failure=[aviso_fallo], on_crashed=[aviso_fallo])
 def reentrenamiento():
     df = cargar_datos()
     feats = get_feature_sets(df)["predictivo"]
@@ -143,9 +144,13 @@ def reentrenamiento():
     if validacion["mae_val"] < validacion["mae_naive_val"]:
         promover_y_exportar(version, feats, validacion)
         print(f"OK: v{version} promocionada a @champion y exportada a model_champion/")
+        avisar(f"ℹ️ Reentreno: v{version} promocionada a champion "
+               f"(MAE validación {validacion['mae_val']:.1f} vs naive {validacion['mae_naive_val']:.1f})")
     else:
         print(f"AVISO: v{version} registrada pero NO promocionada "
               f"(no gana al naive en la validación). Sigue el champion anterior.")
+        avisar(f"ℹ️ Reentreno: v{version} NO promocionada (no gana al naive en la validación: "
+               f"{validacion['mae_val']:.1f} vs {validacion['mae_naive_val']:.1f}). Sigue el champion anterior.")
 
 
 if __name__ == "__main__":
