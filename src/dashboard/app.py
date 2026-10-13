@@ -218,3 +218,61 @@ else:
                 .rename(columns={"sesgo_7d": "Sesgo 7d", "sup": "Umbral +", "inf": "Umbral −"}),
                 color=["#4C9BE8", "#E5534B", "#E5534B"],
             )
+st.subheader("Negocio: ¿acierta las decisiones?")
+st.caption(
+    "Regret (K = 4): sobrecoste medio, en €/MWh, de operar en las 4 horas seleccionadas por el "
+    "modelo frente a las 4 horas óptimas según el precio real (compra en las más baratas, venta en "
+    "las más caras). Un valor de 0 indica una selección óptima. Referencia: misma selección "
+    "realizada con el precio del día anterior (naive)."
+)
+
+# Zona de empate ±5 %: diferencias pequeñas se muestran en gris, sin color de "gana/pierde",
+# para no pintar en rojo un empate (p. ej. 3,12 vs 3,11). Umbral de criterio, documentado en el diario.
+EMPATE_PCT = 5
+
+
+def _delta_vs_naive(modelo, naive):
+    """Texto y color del delta del modelo frente al naive (menos regret = mejor)."""
+    if naive <= 0:
+        return None, "off"
+    pct = (modelo / naive - 1) * 100
+    if abs(pct) < EMPATE_PCT:
+        return "≈ empate", "off"
+    return f"{pct:+.0f} %", "inverse"
+
+
+if evaluacion is None:
+    st.info("Aún no hay evaluación (se genera a las 14:30).")
+else:
+    filtro_neg = (evaluacion.index.date >= inicio) & (evaluacion.index.date <= fin)
+    neg = evaluacion[filtro_neg]
+    venta_m = neg["regret_venta_k4"].mean()
+    venta_n = neg["regret_venta_naive_k4"].mean()
+    compra_m = neg["regret_compra_k4"].mean()
+    compra_n = neg["regret_compra_naive_k4"].mean()
+
+    delta_venta, color_venta = _delta_vs_naive(venta_m, venta_n)
+    delta_compra, color_compra = _delta_vs_naive(compra_m, compra_n)
+
+    c1, c2 = st.columns(2)
+    c1.metric(f"Regret venta · naive {venta_n:.2f} €/MWh", f"{venta_m:.2f} €/MWh",
+              delta=delta_venta, delta_color=color_venta)
+    c2.metric(f"Regret compra · naive {compra_n:.2f} €/MWh", f"{compra_m:.2f} €/MWh",
+              delta=delta_compra, delta_color=color_compra)
+
+    # 4c · Regret de venta por día (modelo vs naive)
+    st.markdown("**Regret de venta por día (€/MWh)**: más bajo es mejor")
+
+    regret_dias = neg.rename(columns={
+        "regret_venta_k4": "Modelo",
+        "regret_venta_naive_k4": "Naive (Precio ayer)",
+    })
+    regret_dias = regret_dias.assign(Día=regret_dias.index.strftime("%m-%d"))
+
+    st.bar_chart(
+        regret_dias,
+        x="Día",
+        y=["Modelo", "Naive (Precio ayer)"],
+        color=["#4C9BE8", "#9AA0A6"],
+        stack=False,
+    )
