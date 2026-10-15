@@ -1,0 +1,83 @@
+import pandas as pd
+import pytest
+from src.monitorizacion.evaluacion import cruzar_con_real,metricas_dia,regret_dia
+
+def test_cruzar_con_real_deja_solo_dias_completos():
+    """Un día con horas sin precio real se descarta: si no, su MAE se calcularía con menos horas y falsearía el ratio 7d y la alarma."""
+    
+    registro = pd.DataFrame({
+        "datetime_utc": pd.to_datetime([
+            "2026-10-13 22:00", "2026-10-13 23:00",   
+            "2026-10-14 22:00", "2026-10-14 23:00",   
+        ], utc=True),
+        "fecha_objetivo": pd.to_datetime(["2026-10-14", "2026-10-14", "2026-10-15", "2026-10-15"]),
+        "prediccion": [100.0, 90.0, 80.0, 70.0],
+    })
+    tabla = pd.DataFrame({
+        "datetime_utc": pd.to_datetime([
+            "2026-10-13 22:00", "2026-10-13 23:00",
+            "2026-10-14 22:00",                      
+        ], utc=True),
+        "precio_espana": [105.0, 88.0, 75.0],
+    })
+
+    resultado = cruzar_con_real(registro, tabla)
+
+    assert len(resultado) == 2
+    assert (resultado["fecha_objetivo"] == "2026-10-14").all()
+    assert resultado["precio_real"].isna().sum() == 0
+
+def test_cruzar_con_real_conserva_dia_de_25_horas():
+    """El 25-oct (cambio de hora) tiene 25 horas: se compara contra las horas predichas, no contra 24, y no se descarta."""
+    
+    horas = pd.date_range("2026-10-24 22:00", periods=25, freq="h", tz="UTC")
+    registro = pd.DataFrame({
+        "datetime_utc": horas,
+        "fecha_objetivo": pd.Timestamp("2026-10-25"),
+        "prediccion": range(25),
+    })
+    tabla = pd.DataFrame({
+        "datetime_utc": horas,
+        "precio_espana": range(25),
+    })
+
+    resultado = cruzar_con_real(registro, tabla)
+
+    assert len(resultado) == 25
+
+def test_metricas_dia_con_numeros_a_mano():
+    """MAE, sesgo, MAE de forma y Spearman calculados a mano en un día de 4 horas: son las métricas del TFM y de la alarma."""
+    
+    dia = pd.DataFrame({
+        "precio_real": [10.0, 20.0, 30.0, 40.0],
+        "prediccion":  [12.0, 18.0, 34.0, 40.0],   
+        "naive_d1":    [15.0, 25.0, 35.0, 45.0],   
+    })
+
+    resultado = metricas_dia(dia)
+
+    assert resultado["mae_modelo"] == 2
+    assert resultado["mae_naive"] == 5
+    assert resultado["sesgo"] == 1
+    assert resultado["mae_forma"] == 2
+    assert resultado["spearman"] == 1
+
+def test_regret_dia_modelo_y_naive():
+    """Regret = lo que pierdes al elegir horas con tu predicción frente a conocer el precio real.
+    Mira el ORDEN, no el valor: el modelo falla todos los precios pero elige bien (regret 0);
+    el naive elige mal la hora barata y paga 50 en vez de 10 (regret de compra 40)."""
+    
+    dia = pd.DataFrame({
+        "precio_real": [10.0, 50.0, 30.0, 80.0],   
+        "prediccion":  [12.0, 45.0, 35.0, 70.0],   
+        "naive_d1":    [40.0, 20.0, 30.0, 60.0],   
+    })
+
+    resultado_modelo = regret_dia(dia, k=1)
+    resultado_naive = regret_dia(dia, col="naive_d1", k=1)
+
+    assert resultado_modelo["regret_compra"] == 0
+    assert resultado_naive["regret_compra"] ==40
+    assert resultado_modelo["regret_venta"] == 0
+    assert resultado_naive["regret_venta"] == 0
+
