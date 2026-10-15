@@ -1413,3 +1413,74 @@ Complementos de modelado (validar siempre con walk-forward y midiendo **por rég
 - **13-oct 11:32:** predicción del 14-oct lanzada a mano antes de la puerta (con v11).
 - Lección: dos huecos en una semana por portátil apagado/sin red. Refuerza el aviso de frescura en el dashboard, el
   *heartbeat* por Telegram y, a medio plazo, la versión en la nube (GitHub Actions con cron), que no depende del portátil.
+
+---
+
+## 2026-10-13 → 2026-10-14 — Sección 4 y Telegram en marcha, tests de `datos.py` y heartbeat de la evaluación
+
+### Construido el 13-14 oct (resumen)
+
+- **Sección 4 del dashboard (Negocio):** regret K=4 del modelo frente al naive, con zona de empate de ±5 % y barras
+  por día. `regret_dia(dia, k, col="naive_d1")` da el regret del naive con la misma función que el del modelo.
+- **Alertas por Telegram implementadas** (`src/notificaciones/telegram.py`): `avisar()` opcional (sin token no hace
+  nada y nunca rompe el flow) y recorta a 4000 caracteres; hook `aviso_fallo` en `on_failure`/`on_crashed` de los
+  tres flows. Mensajes: ✅ predicción hecha (heartbeat), ⚠️ puerta horaria / sin filas / OMIE sin descargar,
+  ❌ fallo de flow, 🚨 alarma de degradación, ℹ️ resultado del reentreno.
+- **Hallazgo de producción (7 → 14 oct):** en los días de excedente solar el modelo acierta la forma pero no llega
+  al cero → el naive gana en MAE esos días, pero en **regret de venta el modelo gana (~2,2 vs ~5,5 €/MWh, −60 %)** y
+  en compra empatan. Salud a 14-oct: ratio 7d 0,72, sesgo 7d +7,0 €.
+
+### Tests (imprescindible nº 1): `tests/test_datos_dashboard.py`
+
+- **Cobertura en el CI:** `pytest-cov` en `.github/workflows/ci.yml` y `python -m pytest -v --cov=src
+  --cov-report=term-missing` (la columna `Missing` da los números de línea sin ejecutar). Punto de partida: **15 %**
+  del total con los 10 tests previos.
+- **7 tests, `src/dashboard/datos.py` de 0 % a 91 %.** Solo queda `predicho_vs_real` (líneas 39-40), que se cubrirá
+  al probar `cruzar_con_real` en `evaluacion.py`.
+
+| Test | Qué protege |
+|---|---|
+| `con_huecos_rellena_horas_quitadas` | días sin predicción (9-oct, 13-oct) como hueco, no como recta inventada; NaN en las horas exactas |
+| `con_huecos_sin_huecos_no_cambia` | un día completo sale idéntico (`assert_frame_equal`: tipos, zona horaria, orden) |
+| `con_huecos_no_extiende_los_extremos` | no se inventan horas antes del primer dato ni después del último |
+| `cambio_hora_25_oct` | día de 25 h: la 02:00 sale dos veces (+02:00 y +01:00) y `con_huecos` rellena la correcta |
+| `ultima_prediccion_registro_desordenado` | "mañana" es la `fecha_objetivo` más alta (`.max()`), no la última fila |
+| `cargar_datos_sin_evaluacion` | antes de las 14:30 devuelve `None` (el dashboard no se cae) y lee solo 2 columnas de features |
+| `cargar_datos_con_evaluacion` | cuando el fichero existe, lo lee (la otra rama del `if`) |
+
+Decisiones y lecciones:
+- **Datos inventados y escritos a mano** (`pd.date_range`, `pd.to_datetime`), nunca los ficheros de `data/`: el CI no
+  los tiene, cambian cada día y no se conoce de antemano el resultado esperado. Rutas en `tmp_path`.
+- **Un test, una función.** La entrada de `con_huecos` se construye a mano y no con `_con_hora_madrid`; la única
+  excepción, a propósito, es el test del 25-oct, que comprueba que las dos piezas encajan.
+- **Fixture `dia_completo`:** cada test recibe una copia nueva → los tests no dependen unos de otros.
+- **`con_huecos` no extiende los extremos** (rango `min()`→`max()`): es una decisión, no un fallo, y queda fijada en un
+  test. Consecuencia: un hueco al final (el día de mañana sin predecir) no se ve como hueco; lo cubre el aviso de frescura.
+- **Valor del test del 25-oct:** si `hora_madrid` perdiera la zona horaria, `con_huecos` generaría 24 horas en vez de
+  25. Los tests del 1-oct no lo detectarían (ese día no hay cambio de hora).
+- **Romper cada `assert` a propósito** una vez (24 → 25): si sigue en verde, el test no comprueba nada.
+- **Comparar siempre el mismo tipo:** un `Timestamp` frente a un texto da `False` aunque la hora sea la misma → `str(...)`.
+- Patrones de pandas: contar = máscara + `.sum()`; "todos cumplen" = máscara + `.all()`; Series → `.tolist()` antes
+  de `==`; `list(df.columns)`; `is None` / `is not None`.
+
+### Heartbeat de la evaluación de la tarde (`src/orquestacion/evaluacion_tarde.py`)
+
+- Antes solo avisaba en ❌ fallo o 🚨 alarma → **el silencio era ambiguo**: no distinguía "todo bien" de "la tarea no
+  se ha ejecutado" (portátil apagado: tampoco salta `on_failure`, porque el flow ni arranca).
+- Ahora avisa siempre: 🚨 si hay alarma; si no, **✅ con el resumen del último día evaluado** (MAE modelo y naive,
+  ratio 7d, sesgo 7d); ℹ️ si aún no hay ningún día completo. Llegan dos mensajes al día (14:30 y 16:30).
+
+### 15-oct evaluado: error de nivel, no de forma
+
+- OMIE publica hacia las 13:00 los precios de D+1, así que la evaluación de las 16:30 ya evaluó el 15-oct.
+- **MAE 23,31 = |sesgo| (−23,31)** con **Spearman 0,97** → todas las horas se desvían en la misma dirección: la forma
+  del día es casi perfecta, pero el nivel está desplazado unos 23 €. El naive acierta mucho más (MAE 12,35).
+- Regret K=4: venta 7,21 (modelo) vs 0,00 (naive); compra 0,00 vs 0,00.
+- Salud tras el 15-oct: **ratio 7d 1,03, sesgo 7d −2,7 €** (umbrales 1,3 y ±14 €) → sin alarma.
+- Es un patrón distinto al de los ceros solares (error de forma en las horas centrales). Vigilar si se repite: es lo
+  que mide el sesgo 7d, y apoya la mejora "objetivo como diferencia respecto al naive" (ataca el sesgo de nivel).
+
+### Siguiente
+
+- Tests de `src/monitorizacion/evaluacion.py`: `cruzar_con_real` (días de 23/25 h), `metricas_dia`, `regret_dia`,
+  `_alarma_por_dia`, `calcular_metricas`. Después `telegram.py` y `antes_de` (aparece `monkeypatch`).
