@@ -1,3 +1,5 @@
+"""Tests de src/dashboard/datos.py con DataFrames pequeños inventados (sin leer data/)."""
+
 import pandas as pd
 import pytest
 from src.dashboard.datos import con_huecos, _con_hora_madrid,ultima_prediccion,cargar_datos
@@ -5,11 +7,15 @@ from src.dashboard.datos import con_huecos, _con_hora_madrid,ultima_prediccion,c
 
 @pytest.fixture
 def dia_completo():
+    """Día normal de 24 h (1-oct, sin cambio de hora) con prediccion = hora (0-23), para saber qué valor hay en cada fila."""
+
     return pd.DataFrame({"hora_madrid":pd.date_range("2026-10-01", periods=24, freq="h", tz="Europe/Madrid"),
                             "prediccion": range(24)
                             })
 
 def test_con_huecos_rellena_horas_quitadas(dia_completo):
+    """Los días sin predicción (p. ej. 9-oct) salen como NaN: el gráfico se corta en vez de unirlos con una recta."""
+    
     quitadas =dia_completo[~dia_completo["prediccion"].isin([5,12,18])]
     resultado = con_huecos(quitadas)
     assert len(resultado) == 24
@@ -18,10 +24,14 @@ def test_con_huecos_rellena_horas_quitadas(dia_completo):
     assert resultado["hora_madrid"][resultado["prediccion"].isna()].dt.hour.tolist() == [5,12,18]
 
 def test_con_huecos_sin_huecos_no_cambia(dia_completo):
+    """Un día completo sale idéntico: no cambia tipos, zona horaria ni orden."""
+    
     resultado = con_huecos(dia_completo)
     pd.testing.assert_frame_equal(resultado, dia_completo)
 
 def test_con_huecos_no_extiende_los_extremo(dia_completo):
+    """Solo rellena entre la primera y la última hora: no inventa horas fuera del rango (decisión, no fallo)."""
+    
     sin_extremos = dia_completo[~dia_completo["prediccion"].isin([0,23])]
     resultado =con_huecos(sin_extremos)
     assert len(resultado) == 22
@@ -30,6 +40,8 @@ def test_con_huecos_no_extiende_los_extremo(dia_completo):
     assert resultado["hora_madrid"].dt.hour.iloc[-1] == 22
 
 def test_cambio_hora_25_oct():
+    """Día de 25 h: la 02:00 sale dos veces (+02:00/+01:00) y con_huecos rellena la correcta."""
+    
     df = pd.DataFrame({"datetime_utc": pd.date_range("2026-10-24 22:00", periods=25, freq="h", tz="UTC"),
                        "prediccion":range(25)})
     resultado =_con_hora_madrid(df)
@@ -42,6 +54,8 @@ def test_cambio_hora_25_oct():
     assert str(rellenado["hora_madrid"][rellenado["prediccion"].isna()].iloc[0]) == "2026-10-25 02:00:00+01:00"
 
 def test_ultima_prediccion_registro_desordenado():
+    """'Mañana' es la fecha_objetivo más alta (.max()), no la última fila del registro."""
+    
     registro = pd.DataFrame({
     "datetime_utc": pd.to_datetime([
         "2026-10-13 22:00", "2026-10-13 23:00",  
@@ -62,6 +76,8 @@ def test_ultima_prediccion_registro_desordenado():
     assert "hora_madrid" in resultado.columns
 
 def test_cargar_datos_sin_evaluacion(tmp_path):                 
+    """Antes de las 14:30 no existe la evaluación: devuelve None en vez de tirar el dashboard."""
+    
     registro = pd.DataFrame({
     "datetime_utc": pd.to_datetime(["2026-10-13 22:00", "2026-10-13 23:00"], utc=True),
     "fecha_objetivo": pd.to_datetime(["2026-10-14", "2026-10-14"]),
@@ -85,6 +101,8 @@ def test_cargar_datos_sin_evaluacion(tmp_path):
     assert len(registro_leido) == 2
 
 def test_cargar_datos_con_evaluacion(tmp_path):
+    """Si el fichero de evaluación existe, lo lee (la otra rama del if): el caso normal a partir de las 14:30."""
+    
     registro = pd.DataFrame({
         "datetime_utc": pd.to_datetime(["2026-10-13 22:00", "2026-10-13 23:00"], utc=True),
         "fecha_objetivo": pd.to_datetime(["2026-10-14", "2026-10-14"]),
