@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from src.monitorizacion.evaluacion import cruzar_con_real,metricas_dia,regret_dia
+from src.monitorizacion.evaluacion import cruzar_con_real,metricas_dia,regret_dia,_alarma_por_dia,calcular_metricas,detectar_degradacion
 
 def test_cruzar_con_real_deja_solo_dias_completos():
     """Un día con horas sin precio real se descarta: si no, su MAE se calcularía con menos horas y falsearía el ratio 7d y la alarma."""
@@ -81,3 +81,76 @@ def test_regret_dia_modelo_y_naive():
     assert resultado_modelo["regret_venta"] == 0
     assert resultado_naive["regret_venta"] == 0
 
+def test_alarma_solo_con_3_dias_seguidos():
+    """La alarma exige 3 días evaluados seguidos fuera de umbral: 2 no bastan, un día bueno
+    reinicia la racha y un ratio NaN (sin 5 días para la media 7d) no cuenta como condición."""
+    
+    ratio_7d = pd.Series([float("nan"), 1.5, 1.5, 1.0, 1.5, 1.5, 1.5])
+    sesgo_7d = pd.Series([0.0] * 7)  
+
+    condicion,alarma  = _alarma_por_dia(ratio_7d, sesgo_7d)
+
+    assert condicion.tolist() == [False, True, True, False, True, True, True]
+    assert alarma.tolist() == [False, False, False, False, False, False, True]
+
+def test_alarma_por_sesgo_en_las_dos_direcciones():
+    """El sesgo cuenta en valor absoluto: quedarse corto 15 € es tan grave como pasarse
+    (caso 15-oct, sesgo −23). Un sesgo de +13 está dentro de umbral y no cuenta."""
+    
+    ratio_7d = pd.Series([1.0] * 4)   # ratio dentro de umbral: aquí solo prueba el sesgo
+    sesgo_7d = pd.Series([-15.0, -15.0, -15.0, 13.0])
+
+    condicion,alarma  = _alarma_por_dia(ratio_7d, sesgo_7d)
+
+    assert condicion.tolist() == [True, True, True, False]
+    assert alarma.tolist() == [False, False , True, False]
+
+def test_calcular_metricas_columnas_y_alarma_sin_datos_suficientes():
+    """Une todas las piezas: una fila por día, las columnas que leen el dashboard y Telegram,
+    y con solo 2 días el ratio 7d es NaN y no hay alarma (min_periods=5)."""
+    
+    cruzado = pd.DataFrame({
+        "fecha_objetivo": pd.to_datetime(["2026-10-14"] * 4 + ["2026-10-15"] * 4),
+        "prediccion":  [12.0, 45.0, 35.0, 70.0] * 2,   # el mismo día que en test_regret_dia, dos veces
+        "naive_d1":    [40.0, 20.0, 30.0, 60.0] * 2,
+        "precio_real": [10.0, 50.0, 30.0, 80.0] * 2,
+    })
+
+    resultado = calcular_metricas(cruzado)
+
+    assert len(resultado) == 2
+    assert "mae_modelo" in resultado.columns
+    assert "mae_naive" in resultado.columns
+    assert "ratio_7d" in resultado.columns
+    assert "sesgo_7d" in resultado.columns
+    assert resultado["ratio_7d"].isna().all()
+    assert (~resultado["alarma"]).all()
+    assert resultado["regret_compra_naive_k1"].tolist() == [40.0, 40.0]
+
+def test_detectar_degradacion_coincide_con_calcular_metricas():
+    """Simulación (detectar_degradacion) y producción (calcular_metricas) deben dar la misma salud
+    el último día: si alguien cambia el cálculo en una ruta y no en la otra, este test lo detecta."""
+    
+    cruzado = pd.DataFrame({
+        "fecha_objetivo": pd.date_range("2026-10-01", periods=7).repeat(4),   # 7 días × 4 horas
+        "precio_real": [10.0, 20.0, 30.0, 40.0] * 7,
+    })
+    cruzado["prediccion"] = cruzado["precio_real"] + 10  
+    cruzado["naive_d1"] = cruzado["precio_real"] + 5      
+
+    produccion = calcular_metricas(cruzado)
+    ultimo = produccion.iloc[-1]
+    simulacion = detectar_degradacion(cruzado)
+    assert ultimo["alarma"] == simulacion["alarma"]
+    assert ultimo["ratio_7d"] == simulacion["ratio_7d"]
+    assert ultimo["sesgo_7d"] == simulacion["sesgo_7d"]
+    assert simulacion["alarma"] is True
+    assert simulacion["ratio_7d"] == 2.0
+    assert simulacion["sesgo_7d"] == 10.0
+    
+
+
+    
+
+
+      
