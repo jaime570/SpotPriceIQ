@@ -122,28 +122,23 @@ def calcular_metricas(cruzado):
 
 def detectar_degradacion(cruzado, umbral=UMBRAL_RATIO, umbral_sesgo=UMBRAL_SESGO,
                          dias_seguidos=DIAS_SEGUIDOS):
-    """Estado de la alarma en el ÚLTIMO día (lo usa simulacion.py).
-    Misma regla que calcular_metricas, vía _alarma_por_dia."""
-    por_dia = cruzado["fecha_objetivo"]
-    error = cruzado["prediccion"] - cruzado["precio_real"]
+    """Estado de la salud en el ÚLTIMO día (lo usa simulacion.py). Mismas piezas que
+    producción (metricas_dia + salud_7d): no tiene cálculo propio, así no puede divergir."""
+    
+    columnas = ["prediccion", "naive_d1", "precio_real"]
+    por_dia = cruzado.groupby("fecha_objetivo")[columnas]
 
-    mae_dia = error.abs().groupby(por_dia).mean()
-    naive_dia = (cruzado["naive_d1"] - cruzado["precio_real"]).abs().groupby(por_dia).mean()
-    sesgo_dia = error.groupby(por_dia).mean()
+    metricas = por_dia.apply(metricas_dia)
+    metricas = salud_7d(metricas, umbral=umbral, umbral_sesgo=umbral_sesgo,
+                        dias_seguidos=dias_seguidos)
 
-    mae_7d = mae_dia.rolling("7D", min_periods=5).mean()
-    naive_7d = naive_dia.rolling("7D", min_periods=5).mean()
-    sesgo_7d = sesgo_dia.rolling("7D", min_periods=5).mean()
-    ratio_7d = mae_7d / naive_7d
-
-    _, alarma = _alarma_por_dia(ratio_7d, sesgo_7d, umbral, umbral_sesgo, dias_seguidos)
+    ultimo = metricas.iloc[-1]
 
     return {
-        "alarma": bool(alarma.iloc[-1]),
-        "ratio_7d": float(ratio_7d.iloc[-1]),
-        "sesgo_7d": float(sesgo_7d.iloc[-1]),
+        "alarma": bool(ultimo["alarma"]),
+        "ratio_7d": float(ultimo["ratio_7d"]),
+        "sesgo_7d": float(ultimo["sesgo_7d"]),
     }
-
 
 def evaluar(ruta_registro=RUTA_REGISTRO):
     """Evalúa todos los días completos del registro y guarda la tabla diaria.
