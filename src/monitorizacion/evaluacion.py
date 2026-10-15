@@ -24,8 +24,8 @@ def cruzar_con_real(registro, tabla):
     cruzado = registro.merge(real, on="datetime_utc", how="left")
 
     por_dia = cruzado.groupby("fecha_objetivo")["precio_real"]
-    predichas = por_dia.transform("size")   # todas las filas del día
-    con_real = por_dia.transform("count")   # solo las que tienen precio real
+    predichas = por_dia.transform("size")   
+    con_real = por_dia.transform("count")   
     cruzado = cruzado[predichas == con_real].copy()
 
     return cruzado.reset_index(drop=True)
@@ -81,12 +81,31 @@ def _alarma_por_dia(ratio_7d, sesgo_7d, umbral=UMBRAL_RATIO, umbral_sesgo=UMBRAL
     return condicion, seguidos == dias_seguidos
 
 
+def salud_7d(metricas, umbral=UMBRAL_RATIO, umbral_sesgo=UMBRAL_SESGO,
+             dias_seguidos=DIAS_SEGUIDOS):
+    """Salud del modelo por día: medias móviles 7d/30d del MAE, sesgo 7d, ratio 7d,
+    condición y alarma de degradación. ÚNICO sitio donde se calculan: lo usan producción
+    (calcular_metricas) y simulación (detectar_degradacion), así que no pueden divergir.
+    `metricas` necesita una fila por día con índice de fecha y las columnas mae_modelo,
+    mae_naive y sesgo (lo que devuelve metricas_dia aplicado por día)."""
+    
+    for col in ["mae_modelo", "mae_naive"]:
+        metricas[f"{col}_7d"] = metricas[col].rolling("7D", min_periods=5).mean()
+        metricas[f"{col}_30d"] = metricas[col].rolling("30D", min_periods=20).mean()
+
+    metricas["sesgo_7d"] = metricas["sesgo"].rolling("7D", min_periods=5).mean()
+    metricas["ratio_7d"] = metricas["mae_modelo_7d"] / metricas["mae_naive_7d"]
+    metricas["condicion_alarma"], metricas["alarma"] = _alarma_por_dia(
+        metricas["ratio_7d"], metricas["sesgo_7d"], umbral, umbral_sesgo, dias_seguidos
+    )
+    return metricas
+
+
 def calcular_metricas(cruzado):
     """Métricas por día (error, sesgo, regret K=1/2/4), medias móviles de 7 y 30 días
     y estado de la alarma de degradación por día.
     Solo calcula: no lee ni guarda ficheros (sirve para producción y para simulación)."""
-    # Solo las columnas que usan las métricas: evita el aviso de pandas
-    # por pasar la columna de agrupación dentro del apply.
+   
     columnas = ["prediccion", "naive_d1", "precio_real"]
     por_dia = cruzado.groupby("fecha_objetivo")[columnas]
 
@@ -97,20 +116,7 @@ def calcular_metricas(cruzado):
         regret_naive = por_dia.apply(regret_dia, k=k, col="naive_d1").add_suffix(f"_naive_k{k}")
         metricas = metricas.join(regret).join(regret_naive)
 
-    # Medias móviles por días de CALENDARIO ("7D"), no por filas: si falta un día,
-    # la ventana sigue siendo de 7 días reales. min_periods deja NaN hasta que haya
-    # días suficientes (una "media de 7 días" con 1 día engaña).
-    for col in ["mae_modelo", "mae_naive"]:
-        metricas[f"{col}_7d"] = metricas[col].rolling("7D", min_periods=5).mean()
-        metricas[f"{col}_30d"] = metricas[col].rolling("30D", min_periods=20).mean()
-
-    # Salud del modelo, guardada por día (antes solo se imprimía en el log).
-    metricas["sesgo_7d"] = metricas["sesgo"].rolling("7D", min_periods=5).mean()
-    metricas["ratio_7d"] = metricas["mae_modelo_7d"] / metricas["mae_naive_7d"]
-    metricas["condicion_alarma"], metricas["alarma"] = _alarma_por_dia(
-        metricas["ratio_7d"], metricas["sesgo_7d"]
-    )
-
+    metricas = salud_7d(metricas)
     return metricas
 
 
