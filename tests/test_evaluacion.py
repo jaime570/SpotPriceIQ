@@ -2,6 +2,20 @@ import pandas as pd
 import pytest
 from src.monitorizacion.evaluacion import cruzar_con_real,metricas_dia,regret_dia,_alarma_por_dia,calcular_metricas,detectar_degradacion
 
+
+
+@pytest.fixture
+def siete_dias_modelo_peor():
+    """7 días × 4 horas; el modelo se pasa 10 € y el naive 5 € en todas las horas
+    → ratio 7d 2,0, sesgo 7d +10 y alarma solo el día 7 (días 5, 6 y 7 fuera de umbral)."""
+    cruzado = pd.DataFrame({
+        "fecha_objetivo": pd.date_range("2026-10-01", periods=7).repeat(4),
+        "precio_real": [10.0, 20.0, 30.0, 40.0] * 7,
+    })
+    cruzado["prediccion"] = cruzado["precio_real"] + 10
+    cruzado["naive_d1"] = cruzado["precio_real"] + 5
+    return cruzado
+
 def test_cruzar_con_real_deja_solo_dias_completos():
     """Un día con horas sin precio real se descarta: si no, su MAE se calcularía con menos horas y falsearía el ratio 7d y la alarma."""
     
@@ -127,28 +141,29 @@ def test_calcular_metricas_columnas_y_alarma_sin_datos_suficientes():
     assert (~resultado["alarma"]).all()
     assert resultado["regret_compra_naive_k1"].tolist() == [40.0, 40.0]
 
-def test_detectar_degradacion_coincide_con_calcular_metricas():
+def test_detectar_degradacion_coincide_con_calcular_metricas(siete_dias_modelo_peor):
     """Simulación (detectar_degradacion) y producción (calcular_metricas) deben dar la misma salud
     el último día: si alguien cambia el cálculo en una ruta y no en la otra, este test lo detecta."""
-    
-    cruzado = pd.DataFrame({
-        "fecha_objetivo": pd.date_range("2026-10-01", periods=7).repeat(4),   # 7 días × 4 horas
-        "precio_real": [10.0, 20.0, 30.0, 40.0] * 7,
-    })
-    cruzado["prediccion"] = cruzado["precio_real"] + 10  
-    cruzado["naive_d1"] = cruzado["precio_real"] + 5      
 
-    produccion = calcular_metricas(cruzado)
+    produccion = calcular_metricas(siete_dias_modelo_peor)
     ultimo = produccion.iloc[-1]
-    simulacion = detectar_degradacion(cruzado)
+    simulacion = detectar_degradacion(siete_dias_modelo_peor)
     assert ultimo["alarma"] == simulacion["alarma"]
     assert ultimo["ratio_7d"] == simulacion["ratio_7d"]
     assert ultimo["sesgo_7d"] == simulacion["sesgo_7d"]
     assert simulacion["alarma"] is True
     assert simulacion["ratio_7d"] == 2.0
     assert simulacion["sesgo_7d"] == 10.0
-    
 
+def test_detectar_degradacion_respeta_umbral_pasado(siete_dias_modelo_peor):
+    """Si se pasa otro umbral (como hace politica_trigger), llega hasta la regla de la alarma:
+    con ratio 2,0 y umbral 2,5 no hay alarma. Detecta pasar la constante en vez del parámetro."""
+
+    simulacion = detectar_degradacion(siete_dias_modelo_peor, umbral=2.5)
+
+    assert simulacion["alarma"] is False
+    assert simulacion["ratio_7d"] == 2.0
+    
 
     
 
