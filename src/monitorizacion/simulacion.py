@@ -2,7 +2,7 @@ import pandas as pd
 from pathlib import Path
 from src.features.feature_sets import get_feature_sets      
 from src.orquestacion.reentrenamiento import entrenar         
-from src.monitorizacion.evaluacion import detectar_degradacion
+from src.monitorizacion.evaluacion import detectar_degradacion, UMBRAL_RATIO, UMBRAL_SESGO, DIAS_SEGUIDOS
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLA_FEATURES = ROOT / "data" / "processed" / "tabla_features.parquet"
@@ -69,8 +69,8 @@ def simular(df, politica, inicio, fin):
 
     return pd.concat(registro_simulado, ignore_index=True), reentrenos
 
-def politica_trigger(dia, historial, reentrenos, umbral=1.3, umbral_sesgo=14,
-                     dias_seguidos=3, enfriamiento=7):
+def politica_trigger(dia, historial, reentrenos, umbral=UMBRAL_RATIO, umbral_sesgo=UMBRAL_SESGO,
+                    dias_seguidos=DIAS_SEGUIDOS, enfriamiento=7):
     """Reentrena si, durante `dias_seguidos` días seguidos, salta alguna alarma:
       - ratio MAE 7d modelo/naive > `umbral` (el modelo pierde claramente contra el naive), o
       - |sesgo 7d| > `umbral_sesgo` €/MWh (el modelo se equivoca siempre hacia el mismo lado:
