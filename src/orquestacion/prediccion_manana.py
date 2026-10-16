@@ -13,10 +13,13 @@ CIERRE_SUBASTA = time(12, 0)
 MARGEN_INICIO = time(11, 50)  # el pipeline tarda ~1 min: no arrancar demasiado justo
 
 
-def antes_de(limite: time) -> bool:
-    """True si la hora actual en Madrid es anterior a `limite`."""
-    return pd.Timestamp.now(tz="Europe/Madrid").time() < limite
-
+def antes_de(limite: time, ahora: pd.Timestamp | None = None) -> bool:
+    """True si la hora en Madrid es anterior a limite.
+    ahora es la hora actual por defecto; se puede pasar otra (con zona horaria) para los tests.
+    Se compara en Europe/Madrid, no en UTC: el cierre es "las 12 en España" en verano y en invierno."""
+    if ahora is None:
+        ahora = pd.Timestamp.now(tz="UTC")
+    return ahora.tz_convert("Europe/Madrid").time() < limite
 
 @task
 def tarea_prediccion():
