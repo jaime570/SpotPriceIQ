@@ -53,3 +53,7 @@ reports/*.html
 reports/sim_*.parquet
 # --- Logs de las ejecuciones programadas (salida de script/run_*.bat) ---
 logs/
+
+# --- Tests: datos de cobertura (pytest-cov; se regeneran en cada ejecución) ---
+.coverage
+htmlcov/

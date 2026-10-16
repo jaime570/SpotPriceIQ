@@ -65,3 +65,4 @@ def test_avisar_fallo_de_red_no_rompe(telegram_falso, monkeypatch):
 
     monkeypatch.setattr(telegram.requests, "post", post_que_falla)
     assert telegram.avisar("hola") is False
+
