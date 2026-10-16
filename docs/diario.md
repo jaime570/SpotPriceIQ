@@ -1484,3 +1484,98 @@ Decisiones y lecciones:
 
 - Tests de `src/monitorizacion/evaluacion.py`: `cruzar_con_real` (días de 23/25 h), `metricas_dia`, `regret_dia`,
   `_alarma_por_dia`, `calcular_metricas`. Después `telegram.py` y `antes_de` (aparece `monkeypatch`).
+
+---
+
+## 2026-10-15 — Tests de `evaluacion.py`
+
+### Trabajo futuro (después del TFM): `min_periods` de las medias 7d y cobertura de la evaluación
+
+- **Situación actual:** las medias móviles usan una ventana de **7 días de calendario** (`rolling("7D")`) con
+  `min_periods=5`: hacen falta al menos 5 días evaluados dentro de la ventana. Con los huecos de producción (9-oct y
+  13-oct, portátil apagado) es lo que permite que haya ratio 7d desde el 12-oct (ventana 6→12 con 5 días evaluados).
+- **Tras migrar a la nube** desaparecen los huecos por portátil apagado, y es tentador subir `min_periods` a 7 para una
+  media "más pura". **No conviene subirlo a 7:** seguirá habiendo huecos ajenos a la máquina (ESIOS publica tarde y la
+  puerta horaria corta la predicción, retrasos o 404 de OMIE, fallos de pandera o de cobertura, incidencias del CI), y
+  con 7 un solo hueco deja el ratio en NaN **una semana entera** → la alarma ciega justo cuando hay problemas.
+  La diferencia de precisión entre una media de 5 y de 7 días es pequeña; la de tener alarma o no, grande.
+- **Decisión con datos:** tras la migración, medir la frecuencia real de huecos y, como mucho, pasar a 6.
+- **Mejor diseño:** separar las dos señales en vez de "castigar" los huecos con `min_periods`:
+  - ratio y sesgo 7d → salud del **modelo**;
+  - nuevo indicador **"días sin evaluar en los últimos 7"** con su propio aviso → salud de la **operación**.
+
+### Pendiente para la limpieza (anotado el 15-oct)
+
+- **Renombrar el parámetro `umbral` → `umbral_ratio`** en `_alarma_por_dia`, `salud_7d`, `detectar_degradacion`
+  (`evaluacion.py`) y `politica_trigger` (`simulacion.py`), y en la llamada por nombre `umbral=umbral` de
+  `detectar_degradacion` y en `tests/test_evaluacion.py` (`umbral=2.5`). Motivo: `umbral_sesgo` lleva apellido y
+  `umbral` no (herencia de cuando la alarma solo miraba el ratio). Hacerlo junto con el renombrado
+  `evaluacion.py` → `evaluacion_diaria.py`. **Ojo:** no tocar la columna `umbral` de `src/dashboard/app.py` (línea
+  ~210), que es otra cosa (la línea del umbral en el gráfico de salud). Los tests detectan cualquier llamada olvidada.
+- **Comentarios de `salud_7d`** quitados durante el refactor: reponer el porqué de `rolling("7D")` (días de calendario,
+  no filas) y de `min_periods=5` (está explicado arriba, en "Trabajo futuro: `min_periods`…").
+- **Mejora menor:** las dos líneas que agrupan por día (`columnas = [...]` y `por_dia = cruzado.groupby(...)`) están
+  repetidas en `calcular_metricas` y `detectar_degradacion`. Es montaje, no fórmulas, y el test de consistencia
+  vigila que no diverjan; se puede sacar a una función auxiliar.
+- **Espacios tras las comas** en el import de `simulacion.py` (línea 5): lo arregla `ruff check . --fix`.
+
+### Tests de `evaluacion.py`, refactor a un solo camino de cálculo y resto de módulos (15-16 oct)
+
+**Resultado:** de 10 a **37 tests** y de **15 % a 40 %** de cobertura total (`datos.py` 91 %, `evaluacion.py` 78 %,
+`telegram.py` 96 %). Lo no cubierto es sobre todo ingesta (APIs reales), dashboard de Streamlit y flows de Prefect:
+código caro de testear y con poca lógica propia. La lógica de métricas, alarma y operación diaria está cubierta.
+
+| Fichero | Tests | Qué protege |
+|---|---|---|
+| `test_evaluacion.py` (9) | `cruzar_con_real` (días incompletos, día de 25 h), `metricas_dia` y `regret_dia` con números a mano, `_alarma_por_dia` (racha de 3, NaN no cuenta, `abs` del sesgo), `calcular_metricas`, consistencia producción/simulación, umbral pasado como parámetro | las métricas del TFM, la alarma y que simulación y producción midan lo mismo |
+| `test_telegram.py` (4) | sin token, mensaje corto, recorte a 4000, fallo de red | que el CI no necesite secretos, que los tests **no envíen mensajes reales** y que una alerta no tumbe un flow |
+| `test_prediccion_manana.py` (3) | `antes_de` en verano e invierno, dentro y fuera de plazo | la puerta horaria y que compare en hora de Madrid, no en UTC |
+| `test_prediccion.py` (2) | `seleccionar_filas_d1`: falta `eolica_prevista_d1` → `ValueError` (incidente del 12-oct); caso normal | que nunca se prediga con una feature vacía |
+| `test_simulacion.py` (2) | política semanal (lunes = `weekday() 0`) y mensual (día 1) | las políticas comparadas en la Fase 9.3 |
+
+**Refactor: un solo camino de cálculo.** `detectar_degradacion` (simulación) recalculaba por su cuenta MAE diario,
+medias 7d, ratio y sesgo: dos copias de las mismas fórmulas que podían divergir sin avisar (*training-serving skew* en
+versión simulación/producción). Ahora:
+- `salud_7d(metricas, umbral, umbral_sesgo, dias_seguidos)`: **único** sitio de medias 7d/30d, ratio, sesgo 7d y alarma.
+- `calcular_metricas` (producción) = `metricas_dia` + regrets + `salud_7d`.
+- `detectar_degradacion` (simulación) = `metricas_dia` + `salud_7d` → último día. Sin cálculo propio.
+- `politica_trigger` usa las constantes `UMBRAL_RATIO`, `UMBRAL_SESGO`, `DIAS_SEGUIDOS` en vez de números copiados.
+- Método: **test de consistencia antes del refactor** (red de seguridad) → refactor → todo en verde; después, test de que
+  el umbral pasado llega de verdad (error silencioso detectado al escribirlo: se pasaba la constante en vez del parámetro).
+
+**Cambios en `src/` para poder testear:** `antes_de(limite, ahora=None)` recibe la hora como parámetro (por defecto, la
+actual): mismo principio que las rutas de `cargar_datos` → lo que viene de fuera (ficheros, hora, red) entra por parámetro.
+
+**Lecciones:**
+- **El resultado esperado se calcula a mano, nunca con el código que se prueba.** Un `assert` que recalcula la fórmula
+  no puede fallar si la fórmula está mal.
+- **Romper a propósito** cada test (cambiar el número, el signo, quitar el `abs`, comparar en UTC…): si sigue en verde,
+  no comprueba nada.
+- `monkeypatch` sustituye piezas solo durante el test (`setattr`, `setenv`, `delenv`). En Telegram hay que neutralizar
+  también `load_dotenv`: si no, en el portátil vuelve a leer el `.env` y **el test envía un mensaje real**; el chivato
+  `enviados == []` es el `assert` que lo detecta (el `is False` pasaba igualmente).
+- `pytest.raises(ValueError, match=...)` para comprobar que algo **sí** falla y con qué mensaje.
+- Fixtures solo para datos usados en 2+ tests; cada escenario pequeño y a medida de lo que comprueba.
+
+### Producción 7 → 16 oct (8 días evaluados) — lectura honesta
+
+- MAE medio modelo **24,8** vs naive **29,3** (−15 %), pero el modelo gana el MAE solo **3 de 8 días**. En un día típico
+  empatan (mediana ~22 € los dos); la diferencia la hacen los días de cambio de régimen, donde el naive se estrella
+  (8-oct 75 €, 12-oct 44 €) y el modelo no (peor día del modelo 36 €). **El modelo funciona como seguro de cola.**
+- Spearman medio 0,93 (acierta la forma) → regret de venta K=4 −26 % (3,5 vs 4,7 €/MWh); compra, empate.
+- Tendencia de los últimos días a peor: ratio 7d 0,68 → 1,11 (umbral 1,3). Vigilar; no tocar el modelo antes de la
+  congelación (con 8 días se sobreajustaría al ruido).
+- Heartbeat de la evaluación funcionando desde el 15-oct (✅ diario con MAE, ratio y sesgo).
+
+### Plan y decisiones (16-oct)
+
+- **Entrega del TFM: 1-nov** (la defensa es después). Congelación de funcionalidades: 25-oct.
+- **Versión en la nube** pasa de "si sobra tiempo" a **necesaria** (dos huecos por portátil apagado). Opción preferida:
+  **GitHub Actions con `cron` + `pip`** (misma receta que el CI). Retos: secretos en GitHub Secrets, **dónde guardar el
+  estado** entre ejecuciones (registro con `keep="first"`, evaluación, datos), `cron` en UTC y con posibles retrasos
+  (margen frente a la puerta de las 11:50; cambio de hora del 25-oct) y convivencia con las tareas del portátil.
+  **Pendiente decidir si antes o después del 25-oct.** Opción B (Actions dentro de la imagen Docker): trabajo futuro.
+- **Docker vs Actions:** Docker sirve el modelo (API FastAPI + interfaz de MLflow, `docker compose up`); Actions hace CI
+  y, en el futuro, la orquestación diaria. Ahora no se tocan: el CI instala con `pip`.
+- Orden previsto: caso de negocio → nube → README + GIF → limpieza.
+- `.coverage` añadido a `.gitignore`.
