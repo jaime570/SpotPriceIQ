@@ -1579,3 +1579,100 @@ actual): mismo principio que las rutas de `cargar_datos` → lo que viene de fue
   y, en el futuro, la orquestación diaria. Ahora no se tocan: el CI instala con `pip`.
 - Orden previsto: caso de negocio → nube → README + GIF → limpieza.
 - `.coverage` añadido a `.gitignore`.
+
+### Pendiente para la limpieza: dashboard (anotado el 16-oct)
+
+- **Gráfico "Error medio diario (MAE)"** (`src/dashboard/app.py`, ~línea 151): comprobar que las barras de modelo y
+  naive se ven una al lado de la otra (ya tiene `stack=False`). En la captura del 16-oct parecían pisarse, pero el eje
+  estaba ampliado (48→53 €) por el zoom interactivo y las barras del modelo quedaban fuera de vista; doble clic
+  restablece el zoom. Si aun así se pisan, pasar a Altair con `xOffset`. Valorar fijar el eje Y desde 0.
+- **Gráfico duplicado** (`app.py`, líneas ~161-166): segundo `st.bar_chart` con los mismos datos de MAE y sin
+  `x="Día"`; parece un resto de prueba → quitarlo.
+
+---
+
+## 2026-10-16 → 2026-10-17 — Fase 12.2: caso de negocio (batería 1 MW / 4 MWh) y tercer hueco
+
+**Qué se ha hecho:** `notebooks/14_caso_de_negocio.ipynb` traduce el error del modelo a euros con un cliente tipo y
+guarda las tablas en `reports/caso_negocio_*.csv` (sensibilidad, riesgo de cola, simulación vs producción, resumen).
+
+### Cliente tipo y supuestos
+
+- **Batería de 1 MW / 4 MWh** que carga en las 4 horas que el modelo cree más baratas y descarga en las 4 más caras.
+- **Precio-aceptante:** su oferta no mueve el precio marginal de OMIE (1 MW es despreciable frente al sistema).
+- Sin eficiencia de ida y vuelta, sin degradación ni costes de operación; un ciclo al día.
+- **Pérdida diaria** = (regret de compra + regret de venta con K=4) × 4 MWh: lo que se deja de ganar frente a haber
+  elegido las horas con el precio real. Se compara contra el **naive D-1** (operar como ayer).
+
+### Resultados (simulación semanal, 635 días, 2025-01-01 → 2026-10-05)
+
+| | Modelo | Naive |
+|---|---|---|
+| Pérdida media (€/día) | 22,2 | 37,6 |
+| Mediana | 11,3 | 20,2 |
+| Percentil 90 | 55,9 | 104,3 |
+| Percentil 95 | 83,7 | 128,0 |
+| Máximo | 255,3 | 286,1 |
+| Días con pérdida > 100 € | 23 | 73 |
+
+- **Ahorro frente al naive: 15,4 €/día → ~5.600 €/año por MW** (−41 % de pérdida).
+- Sensibilidad lineal (precio-aceptante): 10 MW → ~56.000 €/año; 50 MW → ~281.000 €/año.
+- **Tasa de captura** (ingreso obtenido / ingreso con previsión perfecta, ~135.700 €/año por MW en bruto):
+  **modelo 94,0 %, naive 89,9 %**. Ambos capturan casi todo porque la forma diaria del precio es muy repetitiva; la
+  diferencia de 4 puntos es justo lo que vale el modelo.
+- **Producción (9 días evaluados):** pérdida 25,4 vs 40,8 €/día → **−38 %**, coherente con el −41 % de la simulación
+  (algo peor, no mejor como esperaba). Días > 100 €: 0 vs 1.
+
+### Lectura honesta
+
+- **Corrección del "seguro de cola" (entrada anterior):** el modelo no evita los días extremos (máximo 255 vs 286 €).
+  Lo que reduce es la **frecuencia de días malos habituales** (p90 56 vs 104 €; 23 vs 73 días > 100 €).
+- **MAE ≠ €.** Para una batería solo importa acertar **qué horas** son las más baratas y las más caras (el orden), no el
+  nivel. Un día puede tener MAE alto y regret cero. Por eso el regret es la métrica de negocio y el MAE la técnica.
+- **Benchmark externo:** Lago et al. (2021, *epftoolbox*) sitúan el estado del arte en rMAE 0,38–0,61 frente a un naive
+  semanal (D-7). Nuestro modelo: rMAE ≈ 0,83 frente al naive diario (D-1), que es más difícil de batir. No son
+  directamente comparables, pero el orden de magnitud dice que un modelo comercial iría por delante.
+- **El límite es la información, no el algoritmo:** faltan la previsión solar D+1, el gas (MIBGAS) y el CO₂. Valor del
+  proyecto: un **sistema demostrador** con evaluación honesta, no un modelo para operar.
+
+### Incidencia: tercer hueco (predicción para el 18-oct)
+
+- El portátil se quedó sin batería y la predicción del día no se generó. **Telegram no avisó porque el emisor es el
+  propio portátil**: si está apagado, no hay nadie que mande la alerta.
+- Solución propuesta (opcional): **dead man's switch** (p. ej. healthchecks.io). El flow hace "ping" cada día; si el
+  ping no llega a su hora, el servicio externo avisa. Detecta la ausencia de señal, que es justo lo que falla aquí.
+- Refuerza la decisión de llevar la orquestación a la nube (GitHub Actions con `cron`).
+
+### Lecciones
+
+- Guardar los **números completos** en `reports/` y redondear solo al presentar (`.style.format`, README, memoria).
+- Una **cifra en € con su supuesto** ("1 MW, precio-aceptante, sin costes") vale más que una cifra grande sin contexto.
+- Contrastar contra literatura externa evita venderse por encima de lo que el modelo es.
+
+### Pendiente para la limpieza del notebook 14
+
+- `display(riesgo_cola)` duplicado en dos celdas → dejar uno.
+- Renombrar la clave `reduccion_perdida_pct` → `reduccion_perdida` (guarda una fracción, no un porcentaje).
+- En "Supuestos y límites", mencionar que en producción falta el 9-oct (hueco de predicción, no del cálculo).
+
+### Opcional (después de la nube, antes del 1-nov): SHAP de la v11
+
+- El SHAP del Bloque 6 explica el XGBoost de desarrollo; en producción predice la v11 (mismo algoritmo, mismas 97
+  features, datos hasta el 12-oct). Comprobación ligera: SHAP de la v11 sobre los días de producción → **ranking global
+  y valor base** (era 72,5 €, anclado al régimen caro; debería bajar). Cierra el hilo de la no-estacionariedad.
+- Si no da tiempo: en la memoria, "SHAP sobre el modelo de desarrollo; los reentrenos mantienen features y algoritmo".
+
+### Decisión (17-oct): gating XGBoost ↔ LSTM por régimen → trabajo futuro, no antes de la congelación
+
+- **Motivo:** la LSTM iba mejor en el régimen reciente (2025-26), pero en walk-forward es más irregular
+  (16,59 ± 7,96 vs 15,70 ± 5,29 de XGBoost). Un gating podría quedarse con lo mejor de cada uno.
+- **Por qué no ahora (8 días, nube pendiente y necesaria):**
+  1. Los pesos de la LSTM (4 semillas) + scaler + config **no existen fuera de Colab**; solo `reports/lstm_tensores.npz`.
+  2. Habría que reentrenarla con datos hasta octubre (no ha visto el régimen de ceros solares; la v11 sí).
+  3. Empaquetarla como pyfunc en MLflow (`spotprice-lstm`: ventaneo 168h + 4 semillas).
+  4. Definir la regla de régimen y **validarla walk-forward** con varios cambios de régimen.
+  5. Integrarla en el flow, la API, el reentreno semanal y los tests.
+- **Riesgo de método:** ajustar la regla con pocos días recientes = sobreajustarla al ruido (mismo argumento que no
+  tocar el modelo antes de la congelación).
+- **Para la memoria:** trabajo futuro argumentado (evidencia LSTM vs XGB por régimen, hilo de no-estacionariedad,
+  arquitectura ya preparada: el registry admite dos modelos y `model_meta.json` lleva las features) + los 5 pasos.
