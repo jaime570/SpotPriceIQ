@@ -25,7 +25,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest httpx ruff
+          pip install pytest httpx ruff prefect==3.8.5
           pip install pytest-cov
 
       - name: Lint (ruff)
