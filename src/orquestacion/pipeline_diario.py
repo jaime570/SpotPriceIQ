@@ -1,18 +1,24 @@
 from prefect import flow, task
 
-from src.ingesta.omie import ingesta_omie
-from src.ingesta.esios import ingesta_esios
 from src.ingesta.aemet import ingesta_aemet
+from src.ingesta.esios import ingesta_esios
+from src.ingesta.omie import ingesta_omie
+from src.notificaciones.telegram import avisar
 from src.procesamiento.concatenacion import construir_tabla_maestra
-from src.procesamiento.etl import ejecutar_etl 
+from src.procesamiento.etl import ejecutar_etl
 from src.procesamiento.features import ejecutar_features
 from src.validation.control_datos import validar_cobertura
 
+
 @task(retries=0)
 def tarea_cobertura():
-    """Puerta de entrada: valida cobertura de las fuentes crudas. Si falla, para el flow."""
-    return validar_cobertura()
-
+    """Puerta de entrada: valida cobertura de las fuentes crudas.
+    Si una fuente crítica falla, para el flow. Si una no crítica (AEMET) está
+    desactualizada, avisa por Telegram y sigue (se imputa)."""
+    resumen, avisos = validar_cobertura()
+    for aviso in avisos:
+        avisar(f"⚠️ Fuente no crítica desactualizada, se sigue con imputación: {aviso}")
+    return resumen
 
 @task
 def tarea_concat():

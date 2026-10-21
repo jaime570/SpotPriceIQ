@@ -12,15 +12,11 @@ Uso:
     df = validar_warehouse(df)   # devuelve el df si pasa; lanza SchemaErrors si no
 """
 
-# Import clásico, compatible con todas las versiones de pandera.
-# (En pandera >= 0.20 existe además el accesor `pandera.pandas`, pero esta
-#  forma funciona igual y evita avisos del linter en versiones anteriores.)
-import pandera as pa
-from pandera import Column, Check, DataFrameSchema
-import pandas as pd
-from pathlib import Path
 from datetime import date
+from pathlib import Path
 
+import pandas as pd
+from pandera.pandas import Check, Column, DataFrameSchema
 
 # --------------------------------------------------------------------------- #
 # Catálogos de columnas                                                        #
@@ -146,14 +142,13 @@ def validar_warehouse(df):
 ROOT = Path(__file__).resolve().parents[2]
 INTERIM = ROOT / "data" / "interim"
 
-# Suelos sacados del recuento real de cada tabla cruda (~75-80%, con margen).
-# col_fecha = columna de fecha para el chequeo de frescura (None en OMIE: se
-# construye desde ano/mes/dia). dias_frescura = antigüedad máxima tolerada del
-# dato más reciente (AEMET publica con ~2 días de retraso, por eso es más laxo).
+# bloquea = si la fuente está desactualizada, ¿se para el flujo?
+# AEMET no bloquea: la meteo pesa poco en el modelo (SHAP), entra retrasada
+# 3 días y, si falta, la cubren las capas de imputación. Solo se avisa.
 COBERTURA = {
-    "tabla_OMIE":  {"min_filas": 40000, "col_fecha": None,           "dias_frescura": 3},
-    "tabla_ESIOS": {"min_filas": 25000, "col_fecha": "datetime_utc", "dias_frescura": 3},
-    "tabla_AEMET": {"min_filas": 15000, "col_fecha": "fecha",        "dias_frescura": 5},
+    "tabla_OMIE":  {"min_filas": 40000, "col_fecha": None,           "dias_frescura": 3, "bloquea": True},
+    "tabla_ESIOS": {"min_filas": 25000, "col_fecha": "datetime_utc", "dias_frescura": 3, "bloquea": True},
+    "tabla_AEMET": {"min_filas": 15000, "col_fecha": "fecha",        "dias_frescura": 5, "bloquea": False},
 }
 
 
@@ -168,18 +163,20 @@ def _fecha_maxima(df, col_fecha):
     return fechas.max().normalize()
 
 
-def validar_cobertura() -> dict:
+def validar_cobertura() -> tuple[dict, list]:
     """Contrato de cobertura de las fuentes crudas (interim).
 
     Por cada fuente comprueba: (1) al menos `min_filas` filas — detecta un
-    colapso tipo ESIOS-97; (2) que el dato más reciente no sea más viejo que
-    `dias_frescura` días — detecta una fuente que dejó de actualizarse.
+    colapso tipo ESIOS-97 (bloquea siempre); (2) que el dato más reciente no sea
+    más viejo que `dias_frescura` días — detecta una fuente que dejó de
+    actualizarse. Si la fuente tiene `bloquea=False`, (2) solo genera un aviso.
 
-    Recoge TODOS los incumplimientos y, si hay alguno, lanza ValueError con el
-    informe completo. Si todo pasa, devuelve {fuente: (n_filas, fecha_max)}.
+    Si hay fallos bloqueantes, lanza ValueError con el informe completo.
+    Si no, devuelve ({fuente: (n_filas, fecha_max)}, [avisos]).
     """
     hoy = pd.Timestamp(date.today())
     fallos = []
+    avisos = []
     resumen = {}
     for archivo, reglas in COBERTURA.items():
         ruta = INTERIM / archivo
@@ -197,11 +194,14 @@ def validar_cobertura() -> dict:
 
         antiguedad = (hoy - fecha_max).days
         if antiguedad > reglas["dias_frescura"]:
-            fallos.append(
-                f"{archivo}: dato más reciente {fecha_max.date()} "
-                f"({antiguedad} días > {reglas['dias_frescura']} permitidos)")
+            mensaje = (f"{archivo}: dato más reciente {fecha_max.date()} "
+                       f"({antiguedad} días > {reglas['dias_frescura']} permitidos)")
+            if reglas["bloquea"]:
+                fallos.append(mensaje)
+            else:
+                avisos.append(mensaje)
 
     if fallos:
         raise ValueError("Contrato de cobertura incumplido:\n- " + "\n- ".join(fallos))
-    return resumen
+    return resumen, avisos
 
