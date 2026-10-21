@@ -1,0 +1,12 @@
+# Configuración de Ruff del proyecto: la misma en local y en el CI.
+target-version = "py311"
+line-length = 120
+extend-exclude = ["notebooks"]   # exploración: no se mantiene como código
+
+[lint]
+# Reglas elegidas explícitamente (no dependen de la versión de Ruff):
+#   E4, E7, E9 -> errores básicos de estilo que suelen ser fallos
+#   F          -> pyflakes: imports sin usar, nombres no definidos...
+#   I          -> orden de los imports
+#   B          -> bugbear: patrones que suelen ser bugs
+select = ["E4", "E7", "E9", "F", "I", "B"]

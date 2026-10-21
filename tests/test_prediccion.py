@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+
 from src.monitorizacion.prediccion import seleccionar_filas_d1
 
 

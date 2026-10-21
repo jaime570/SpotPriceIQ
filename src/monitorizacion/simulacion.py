@@ -1,8 +1,10 @@
-import pandas as pd
 from pathlib import Path
-from src.features.feature_sets import get_feature_sets      
-from src.orquestacion.reentrenamiento import entrenar         
-from src.monitorizacion.evaluacion import detectar_degradacion, UMBRAL_RATIO, UMBRAL_SESGO, DIAS_SEGUIDOS
+
+import pandas as pd
+
+from src.features.feature_sets import get_feature_sets
+from src.monitorizacion.evaluacion import DIAS_SEGUIDOS, UMBRAL_RATIO, UMBRAL_SESGO, detectar_degradacion
+from src.orquestacion.reentrenamiento import entrenar
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLA_FEATURES = ROOT / "data" / "processed" / "tabla_features.parquet"

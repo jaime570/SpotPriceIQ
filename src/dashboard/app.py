@@ -3,14 +3,20 @@
 Lanzar desde la raíz del proyecto:  python -m streamlit run src/dashboard/app.py
 (python -m añade la raíz al sys.path, por eso funciona `from src...`)."""
 
+import pandas as pd
 import streamlit as st
-import pandas as pd 
-from src.monitorizacion.evaluacion import DIAS_SEGUIDOS, UMBRAL_RATIO, UMBRAL_SESGO
-from src.orquestacion.prediccion_manana import MARGEN_INICIO
 
 from src.dashboard.datos import (
-    RUTA_EVALUACION, RUTA_REGISTRO, TABLA_FEATURES, cargar_datos, ultima_prediccion,predicho_vs_real,con_huecos,
+    RUTA_EVALUACION,
+    RUTA_REGISTRO,
+    TABLA_FEATURES,
+    cargar_datos,
+    con_huecos,
+    predicho_vs_real,
+    ultima_prediccion,
 )
+from src.monitorizacion.evaluacion import DIAS_SEGUIDOS, UMBRAL_RATIO, UMBRAL_SESGO
+from src.orquestacion.prediccion_manana import MARGEN_INICIO
 
 st.set_page_config(page_title="SpotPriceIQ", layout="wide")
 

@@ -1,8 +1,10 @@
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
 import holidays
-from src.features.feature_sets import get_meteo,get_feature_sets
+import numpy as np
+import pandas as pd
+
+from src.features.feature_sets import get_feature_sets, get_meteo
 
 PATH = Path(__file__).resolve().parents[2]
 PROCESSED = PATH / "data" / "processed"

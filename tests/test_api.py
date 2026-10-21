@@ -1,6 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
+
 from src.api.main import app, ml
+
 
 @pytest.fixture
 def client():

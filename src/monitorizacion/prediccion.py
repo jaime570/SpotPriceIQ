@@ -1,11 +1,10 @@
-import pandas as pd
-from pathlib import Path
-from src.features.feature_sets  import get_feature_sets
 import json
+from pathlib import Path
+
 import mlflow
+import pandas as pd
 
-
-
+from src.features.feature_sets import get_feature_sets
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLA_FEATURES = ROOT / "data" / "processed" / "tabla_features.parquet"
@@ -94,9 +93,9 @@ def predecir_d1():
     dia = a_predecir["fecha"].iloc[0].date()
     print(f"Predicción D+1 guardada: {dia} | {len(registro)} horas | modelo v{meta['version']} | {ruta}")
     print("  4 horas más BARATAS (comprar/cargar): "
-          + ", ".join(f"{h:02d}h ({p:.1f} €)" for h, p in zip(baratas["hora"], baratas["prediccion"])))
+          + ", ".join(f"{h:02d}h ({p:.1f} €)" for h, p in zip(baratas["hora"], baratas["prediccion"],strict=False)))
     print("  4 horas más CARAS (vender/descargar): "
-          + ", ".join(f"{h:02d}h ({p:.1f} €)" for h, p in zip(caras["hora"], caras["prediccion"])))
+          + ", ".join(f"{h:02d}h ({p:.1f} €)" for h, p in zip(caras["hora"], caras["prediccion"], strict=False)))
     return registro
 
 

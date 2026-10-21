@@ -1,16 +1,17 @@
 from datetime import time
 
 import pandas as pd
-from prefect import task, flow, get_run_logger
+from prefect import flow, get_run_logger, task
 
-from src.orquestacion.pipeline_diario import pipeline_diario
 from src.monitorizacion.prediccion import predecir_d1
 from src.notificaciones.telegram import avisar, aviso_fallo
+from src.orquestacion.pipeline_diario import pipeline_diario
+
 # Cierre de la subasta diaria de OMIE: 12:00 hora peninsular.
 # Se compara en Europe/Madrid (no en UTC) para que el límite siga siendo
 # "las 12 en España" tanto en verano (UTC+2) como en invierno (UTC+1).
 CIERRE_SUBASTA = time(12, 0)
-MARGEN_INICIO = time(11, 50)  # el pipeline tarda ~1 min: no arrancar demasiado justo
+MARGEN_INICIO = time(11, 50) 
 
 
 def antes_de(limite: time, ahora: pd.Timestamp | None = None) -> bool:
@@ -68,8 +69,8 @@ def _resumen(registro):
     dia = registro["fecha_objetivo"].iloc[0]
     version = registro["modelo_version"].iloc[0]
 
-    lista_baratas = ", ".join(f"{h:02d}h {p:.0f}€" for h, p in zip(baratas["hora"], baratas["prediccion"]))
-    lista_caras = ", ".join(f"{h:02d}h {p:.0f}€" for h, p in zip(caras["hora"], caras["prediccion"]))
+    lista_baratas = ", ".join(f"{h:02d}h {p:.0f}€" for h, p in zip(baratas["hora"], baratas["prediccion"], strict=True))
+    lista_caras = ", ".join(f"{h:02d}h {p:.0f}€" for h, p in zip(caras["hora"], caras["prediccion"], strict=True))
 
     return (f"✅ Predicción {dia:%d-%m} guardada (v{version})\n"
             f"Baratas: {lista_baratas}\n"

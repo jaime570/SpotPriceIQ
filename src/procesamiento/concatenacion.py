@@ -1,7 +1,8 @@
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import unicodedata
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 PATH = Path(__file__).resolve().parents[2]
 INTERIM = PATH / "data" / "interim"

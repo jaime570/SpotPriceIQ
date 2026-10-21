@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class PredictRequest(BaseModel):
     features: dict[str, float]          # nombre_feature -> valor
 

@@ -1,6 +1,7 @@
 import pandas as pd
 
-from src.monitorizacion.simulacion import politica_semanal, politica_mensual
+from src.monitorizacion.simulacion import politica_mensual, politica_semanal
+
 
 def test_politica_semanal_solo_reentrena_los_lunes():
     """weekday() empieza en lunes = 0: la política semanal (la de producción) reentrena el lunes

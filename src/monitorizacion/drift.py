@@ -1,10 +1,10 @@
+from pathlib import Path
+
+import pandas as pd
 from evidently import Report
 from evidently.presets import DataDriftPreset
-import pandas as pd 
-import numpy as np
-from pathlib import Path
+
 from src.features import feature_sets
-import datetime
 
 PATH = Path(__file__).resolve().parents[2]
 PROCESSED = PATH / "data" / "processed"

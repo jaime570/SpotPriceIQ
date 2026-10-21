@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 import requests
-
 from prefect import flow, task
+
 from src.notificaciones.telegram import avisar
 
 RAW = Path(__file__).resolve().parents[2] / "data" / "raw" / "omie"

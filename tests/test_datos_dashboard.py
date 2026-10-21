@@ -2,7 +2,8 @@
 
 import pandas as pd
 import pytest
-from src.dashboard.datos import con_huecos, _con_hora_madrid,ultima_prediccion,cargar_datos
+
+from src.dashboard.datos import _con_hora_madrid, cargar_datos, con_huecos, ultima_prediccion
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def test_con_huecos_sin_huecos_no_cambia(dia_completo):
     resultado = con_huecos(dia_completo)
     pd.testing.assert_frame_equal(resultado, dia_completo)
 
-def test_con_huecos_no_extiende_los_extremo(dia_completo):
+def test_con_huecos_no_extiende_los_extremos(dia_completo):
     """Solo rellena entre la primera y la última hora: no inventa horas fuera del rango (decisión, no fallo)."""
     
     sin_extremos = dia_completo[~dia_completo["prediccion"].isin([0,23])]

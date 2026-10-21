@@ -1,7 +1,14 @@
 import pandas as pd
 import pytest
-from src.monitorizacion.evaluacion import cruzar_con_real,metricas_dia,regret_dia,_alarma_por_dia,calcular_metricas,detectar_degradacion
 
+from src.monitorizacion.evaluacion import (
+    _alarma_por_dia,
+    calcular_metricas,
+    cruzar_con_real,
+    detectar_degradacion,
+    metricas_dia,
+    regret_dia,
+)
 
 
 @pytest.fixture

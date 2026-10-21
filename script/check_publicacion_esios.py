@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.ingesta.esios import descargar_indicador, parsear_indicador, INDICADORES_PREDICTIVO
+from src.ingesta.esios import INDICADORES_PREDICTIVO, descargar_indicador, parsear_indicador
 
 ROOT = Path(__file__).resolve().parents[1]            # raíz del proyecto
 CARPETA = ROOT / "data" / "monitoring" / "check_esios"

@@ -9,8 +9,8 @@ Convención fija del proyecto: el orden de argumentos es SIEMPRE (y_real, y_pred
 import numpy as np
 from sklearn.metrics import (
     mean_absolute_error,
-    root_mean_squared_error,
     mean_absolute_percentage_error,
+    root_mean_squared_error,
 )
 
 

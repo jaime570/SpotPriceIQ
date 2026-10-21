@@ -1,11 +1,12 @@
 import os
+from datetime import date, timedelta
 from functools import reduce
 from pathlib import Path
+
 import pandas as pd
 import requests
 from dotenv import load_dotenv
 from prefect import flow, task
-from datetime import date, timedelta
 
 ROOT = Path(__file__).resolve().parents[2]
 INTERIM = ROOT / "data" / "interim"

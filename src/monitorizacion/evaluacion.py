@@ -1,5 +1,6 @@
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLA_FEATURES = ROOT / "data" / "processed" / "tabla_features.parquet"

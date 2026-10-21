@@ -1,7 +1,7 @@
-from datetime import time
 import pandas as pd
 
-from src.orquestacion.prediccion_manana import antes_de, MARGEN_INICIO
+from src.orquestacion.prediccion_manana import MARGEN_INICIO, antes_de
+
 
 def test_antes_de_compara_en_hora_de_madrid_en_verano():
     """A las 09:55 UTC son las 11:55 en Madrid (verano, +02:00): ya pasó el margen de las 11:50.

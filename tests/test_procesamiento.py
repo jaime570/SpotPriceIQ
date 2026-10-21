@@ -1,9 +1,11 @@
+import numpy as np
 import pandas as pd
-import numpy as np 
-from src.procesamiento.etl import limpiar_aemet
 import pytest
+
 from src.procesamiento.concatenacion import pivotar
-from src.procesamiento.features import marcar_entrenable,imputar_capa_1
+from src.procesamiento.etl import limpiar_aemet
+from src.procesamiento.features import imputar_capa_1, marcar_entrenable
+
 
 def test_limpiar_aemet_centinelas_y_comas():
     df = pd.DataFrame({"prec_madrid": ['12,2', 'Ip', 'Acum', '0,0']})
@@ -30,7 +32,7 @@ def test_marcar_entrenable():
         "tmed_madrid_lag3d": [10.0, np.nan],
     })
     out = marcar_entrenable(df)
-    assert out["entrenable"].iloc[0] == True
+    assert out["entrenable"].iloc[0]
     assert not out["entrenable"].iloc[1]
 
 def test_imputar_capa1_rellena_hueco_corto():

@@ -1,4 +1,4 @@
-from prefect import task, flow
+from prefect import flow, task
 
 from src.monitorizacion.evaluacion import evaluar
 from src.notificaciones.telegram import avisar, aviso_fallo
