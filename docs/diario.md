@@ -1655,12 +1655,17 @@ guarda las tablas en `reports/caso_negocio_*.csv` (sensibilidad, riesgo de cola,
 - Renombrar la clave `reduccion_perdida_pct` → `reduccion_perdida` (guarda una fracción, no un porcentaje).
 - En "Supuestos y límites", mencionar que en producción falta el 9-oct (hueco de predicción, no del cálculo).
 
-### Opcional (después de la nube, antes del 1-nov): SHAP de la v11
+### Recomendado antes del 1-nov: rehacer el SHAP sobre el modelo en producción (corregido el 20-oct)
 
-- El SHAP del Bloque 6 explica el XGBoost de desarrollo; en producción predice la v11 (mismo algoritmo, mismas 97
-  features, datos hasta el 12-oct). Comprobación ligera: SHAP de la v11 sobre los días de producción → **ranking global
-  y valor base** (era 72,5 €, anclado al régimen caro; debería bajar). Cierra el hilo de la no-estacionariedad.
-- Si no da tiempo: en la memoria, "SHAP sobre el modelo de desarrollo; los reentrenos mantienen features y algoritmo".
+- **Corrección:** el SHAP del Bloque 6 se hizo ANTES de la auditoría *point-in-time*, sobre el XGBoost de entonces
+  (~102 features, con previsiones genéricas de ESIOS, demanda y solar prevista, y meteo del mismo día). El modelo en
+  producción (v12, 97 features) usa otro conjunto: solo `eolica_prevista_d1` de ESIOS y meteo retrasada 3 días
+  (`*_lag3d`). La nota anterior ("mismas 97 features") era incorrecta.
+- Consecuencia: conclusiones como "solar FV, fundamental nº 1" o "la demanda sube el precio" describen un modelo con
+  leakage, no el actual. Probablemente se mantienen el dominio de los lags de precio y el efecto de la eólica, pero hay
+  que comprobarlo.
+- Tarea (~1 sesión): TreeSHAP sobre la v12 → ranking global, beeswarm y valor base (era 72,5 €); comparar con el
+  original. Para la memoria: cómo cambió en qué se apoya el modelo al quitar el leakage.
 
 ### Decisión (17-oct): gating XGBoost ↔ LSTM por régimen → trabajo futuro, no antes de la congelación
 
@@ -1676,3 +1681,80 @@ guarda las tablas en `reports/caso_negocio_*.csv` (sensibilidad, riesgo de cola,
   tocar el modelo antes de la congelación).
 - **Para la memoria:** trabajo futuro argumentado (evidencia LSTM vs XGB por régimen, hilo de no-estacionariedad,
   arquitectura ya preparada: el registry admite dos modelos y `model_meta.json` lleva las features) + los 5 pasos.
+
+---
+
+## 2026-10-19 → 2026-10-21 — CI con prefect, revisión externa, incidente AEMET (4º hueco) y Ruff obligatorio
+
+### 19-oct
+
+- **CI en rojo desde el 16-oct (#36–#38):** los tests de `prediccion_manana` y `simulacion` importan `prefect`, que no
+  estaba en el CI. Pasaban en local, fallaban en un entorno limpio. Arreglo: `prefect==3.8.5` en el paso de instalación
+  de `ci.yml` (no en `requirements.txt`: la imagen de la API no lo necesita). Lección: mirar Actions tras cada push.
+- **Reentreno automático del lunes: v12 promocionada** (validación 14 días: MAE 33,47 vs naive 38,85).
+  `model_champion/` actualizado en local, pendiente de subir (escenario de la opción B de la nube).
+- **Revisión externa del proyecto.** Puntos aceptados: dependencias separadas, `.env.example`, sMAPE con precio 0,
+  Ruff obligatorio, README alineado con lo que hay (dashboard hecho, la API no sirve intervalos), métricas en tres
+  bloques (walk-forward 16,49 · validación reciente 33,47 · producción), caso de negocio etiquetado como simulación.
+  Aplazados: endpoint de *readiness*, recalibración de intervalos, demo pública.
+- Token de Telegram rotado (había quedado expuesto en un ZIP compartido).
+- Documentación de apoyo: guía del proyecto pieza a pieza, glosario técnico, diagramas de tuberías y dependencias.
+- Limitación documentada: `imputar_climatologia` calcula la media mensual con todo el histórico (leakage leve en el
+  backtest; impacto despreciable por el bajo peso de la meteo). Mejora: media expanding, mediana en precipitación e
+  indicador de imputación.
+
+### 20-oct
+
+- Reunión con el tutor (guion preparado: visión general, etapas por decisiones, resultados, incidencias, plan).
+- **Corrección del SHAP** (ver la entrada del 16-17 oct): se hizo antes de la auditoría *point-in-time*; hay que
+  repetirlo sobre la v12.
+
+### 21-oct — Puerta de reentreno reforzada: descartada con argumento
+
+- Propuesta: que el candidato no solo gane al naive, sino que no empeore al champion.
+- **Problema detectado al diseñarla:** la copia validable del candidato se entrena sin los últimos 14 días (hasta el
+  día 12), y el champion ya tenía datos hasta el 19. Compararlos en los días 20–26 enfrenta a un modelo con *menos*
+  datos recientes contra otro con más: sesgado en contra del nuevo.
+- **Fondo:** con la misma receta (algoritmo, features, hiperparámetros, semilla), igualar los datos produce el mismo
+  modelo. Lo único que distingue al nuevo es la semana extra, y no se puede evaluar sin el futuro. Además, con 7 días
+  la diferencia entre dos modelos casi idénticos queda dentro del ruido.
+- **Lo que sí está comparado en igualdad de condiciones es la política:** la simulación de 635 días (semanal 15,90 vs
+  mensual 16,26). La puerta contra el naive frena reentrenos rotos; la alarma de la tarde y `model_champion_anterior/`
+  cubren una mala promoción.
+- **Trabajo futuro:** modo sombra (*champion-challenger*): el candidato predice en paralelo una semana y se promociona
+  si no es peor que el champion con un margen de no inferioridad; test de Diebold-Mariano cuando haya ventana larga.
+  La comparación contra el champion tiene sentido sobre todo cuando cambia la receta.
+
+### 21-oct — Incidente: AEMET desactualizada bloquea el pipeline (4º hueco, predicción del 22-oct)
+
+- **Qué pasó:** el contrato de cobertura falló a las 11:05 y 11:17: `tabla_AEMET` con dato más reciente del 15-oct
+  (6 días > 5 permitidos). AEMET responde con errores 500/401 intermitentes y no publica días posteriores al 15-oct
+  (retraso de su lado). El contrato paró el flujo, como estaba diseñado, y Telegram avisó.
+- **Consecuencia:** sin predicción para el 22-oct (las puertas de 11:50/12:00 impiden predecir después). La evaluación
+  de la tarde también habría fallado: comparte `pipeline_diario`.
+- **Decisión: degradación controlada.** No todas las fuentes pesan igual:
+  - OMIE y ESIOS **bloquean** (precio y eólica D+1 son críticos).
+  - AEMET **no bloquea**: la meteo pesa poco (SHAP), entra retrasada 3 días y los huecos los cubren las capas de
+    imputación. Si está desactualizada → aviso ⚠️ por Telegram y se sigue.
+  - El mínimo de filas sigue bloqueando para todas (una tabla que pierde filas es un bug, no un retraso).
+- **Implementación:** `COBERTURA` con clave `bloquea`; `validar_cobertura` separa `fallos` y `avisos` y devuelve
+  `(resumen, avisos)`; `tarea_cobertura` envía los avisos por Telegram. Probado: `pipeline_diario` completo con el ⚠️
+  recibido; 37 tests en verde. Commit `b29850c`.
+- **Lección:** un contrato de datos no es solo "pasa / no pasa": hay que decidir qué fuentes son críticas y cuáles
+  admiten degradación. Primer hueco por una fuente externa (los tres anteriores fueron por el portátil).
+
+### 21-oct — Ruff obligatorio en el CI
+
+- Ruff 0.17.1 trae muchas más reglas por defecto que versiones anteriores → las reglas dependían de la versión
+  instalada. Arreglo: `ruff.toml` en el repo con reglas explícitas (`E4`, `E7`, `E9`, `F`, `I`, `B`), `line-length`
+  120, notebooks excluidos; versión fijada en el CI (`ruff==0.17.1`).
+- 34 avisos: 29 automáticos (`--fix`: orden de imports, imports sin usar) y 5 a mano: `zip(..., strict=True)` en
+  `prediccion.py` y `prediccion_manana.py` (si las columnas no miden lo mismo, que falle) y un `== True` en un test.
+- De paso: `from pandera.pandas import ...` (fuera el FutureWarning de pandera).
+- `ci.yml`: sin `continue-on-error`, `ruff check src tests script`. CI #40 en verde: lint y tests ya bloquean.
+- Pendiente de limpieza: borrar `add_features.py` y `export_model.py` de la raíz (Ruff los marca si se revisa todo).
+
+### Pendiente antes del 25-oct
+
+- Nube (flows diarios en GitHub Actions + repo de datos), dependencias separadas, sMAPE con precio 0 + test,
+  `.env.example`, limpieza de ficheros sueltos, rehacer SHAP sobre la v12, subir `model_champion/` (v12).
