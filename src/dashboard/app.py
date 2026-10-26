@@ -163,13 +163,6 @@ else:
     )
     st.caption(f"Periodo: modelo {mae_m:.1f} · naive {mae_n:.1f} €/MWh "
                f"({(mae_m / mae_n - 1) * 100:+.0f} %)")
-    
-    st.bar_chart(
-        mae_dias,
-        y=["Modelo", "Naive (Precio ayer)"],
-        color=["#4C9BE8", "#9AA0A6"],
-        stack=False
-    )
 
 
 # ─────────────────────────── Sección 3 · Salud del modelo ───────────────────────────
