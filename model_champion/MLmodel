@@ -1,4 +1,4 @@
-artifact_path: file:///c:/Users/jaime/Desktop/Jaime_LLorca/proyectos/prediccion-electrica/notebooks/mlruns/1/models/m-1d02a9573cfc41a09d43d58741c679f0/artifacts
+artifact_path: file:///c:/Users/jaime/Desktop/Jaime_LLorca/proyectos/prediccion-electrica/notebooks/mlruns/1/models/m-68764012ca974af49cad54eecbe814c5/artifacts
 flavors:
   python_function:
     data: model.ubj
@@ -14,9 +14,9 @@ flavors:
     model_format: ubj
     xgb_version: 3.2.0
 mlflow_version: 3.14.0
-model_id: m-1d02a9573cfc41a09d43d58741c679f0
-model_size_bytes: 1808929
-model_uuid: m-1d02a9573cfc41a09d43d58741c679f0
+model_id: m-68764012ca974af49cad54eecbe814c5
+model_size_bytes: 1807902
+model_uuid: m-68764012ca974af49cad54eecbe814c5
 prompts: null
-run_id: 21c79385e74040949094668a8a4ddbc8
-utc_time_created: '2026-10-13 09:30:12.522438'
+run_id: 18845e6935284f81976aabfa94112e94
+utc_time_created: '2026-10-26 09:00:17.288720'
