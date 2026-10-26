@@ -1,0 +1,7 @@
+,Simulación,Producción
+días evaluados,635.0,9.0
+pérdida media modelo (€/día),22.2,25.4
+pérdida media naive (€/día),37.6,40.8
+reducción de pérdidas (%),40.9,37.8
+días > 100 € modelo,23.0,0.0
+días > 100 € naive,73.0,1.0
