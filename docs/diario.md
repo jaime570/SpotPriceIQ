@@ -163,7 +163,7 @@ Si el problema es que el expanding arrastra la crisis del gas, una ventana **rol
 **Pendiente**
 - Verificar la hipótesis del régimen (niveles de precio real vs predicho en primavera-2024).
 - Experimento rolling vs expanding.
-- Modelo **explicativo** (mismo notebook 06, solo cambia X).
+- Modelo **explicativo** (mismo notebook 07, solo cambia X).
 - Tuning con Optuna/`TimeSeriesSplit` (5.5).
 
 
@@ -330,12 +330,12 @@ es el **Bloque 10** (monitorización + retraining/recalibración adaptativa). Es
 (plantear hipótesis, probarlas, aceptar que fallan, entender por qué) es el mayor valor de portfolio
 de la sesión.
 
-**Próximo paso:** Fase 5.2 — LSTM (notebook 08), a comparar contra XGBoost (15,70) en el punto.
+**Próximo paso:** Fase 5.2 — LSTM (notebook 09), a comparar contra XGBoost (15,70) en el punto.
 
 
 ---
 
-## Fase 5.2 — LSTM (notebook 08)
+## Fase 5.2 — LSTM (notebook 09)
 
 ### Tramo A — Preparación de datos y elección de exógenas
 
@@ -939,7 +939,7 @@ eliminado > 0 → misma conclusión que el principio de precaución de la LSTM, 
 
 **Nota importante — el 15,70 ya no es la referencia.** El 15,70 se midió con 30 folds (datos hasta
 ~jun-2026). Con el full-refresh (hasta sep-2026, 33 folds) los meses nuevos jul/ago/sep-2026 son duros
-(19-25 €/MWh). La **cifra oficial** es la del notebook 06: **walk-forward solo-D+1 = 16,14 ± 5,17**
+(19-25 €/MWh). La **cifra oficial** es la del notebook 07: **walk-forward solo-D+1 = 16,14 ± 5,17**
 (33 folds), registrada como `MAE_wf_ref` de la **v6 @champion**. Esa es la línea base contra la que debe
 medir la Fase 9.2.
 
@@ -951,14 +951,14 @@ media y el modelo, congelado desde marzo, infrapredice cada vez más. El walk-fo
 lo sufre igual: 16,14 vs naive 18,61. Lectura: la **cadencia de reentrenamiento** importa tanto como el
 modelo → motivación directa de 9.2 (predicho vs real) y 9.3 (trigger). Es el sesgo de SHAP (−3,58) con el
 signo cambiado: "encogimiento" hacia el nivel de precios del entrenamiento.
-**Corrección — el "explicativo" del notebook 06 ya no es el explicativo.** `tabla_features` no tiene columnas
+**Corrección — el "explicativo" del notebook 07 ya no es el explicativo.** `tabla_features` no tiene columnas
 `_real` desde que se quitó el merge de ESIOS explicativo en `concatenacion.py`, así que ese set quedó en meteo +
 lags + calendario (96 features, sin ESIOS). Sus cifras (holdout 19,35, WF 17,02) son en realidad una ablación
 "sin previstas ESIOS": quitarlas empeora el WF en ~0,9 → las previstas aportan valor real. El hallazgo histórico
 del explicativo con `_real` (16,73 vs 15,70) sigue siendo válido, pero no se ha re-medido. Se retira el set
 explicativo del código.
 
-**Deuda detectada en el notebook 06:** la celda 17 compara contra un naive de holdout fijado a mano (15,5,
+**Deuda detectada en el notebook 07:** la celda 17 compara contra un naive de holdout fijado a mano (15,5,
 de otro periodo) y `baseline_walkforward.parquet` llega solo a jun-2026 (30 meses) → las tablas por año de
 las celdas 10/12 mezclan periodos en 2026 (expanding hasta jun, rolling hasta sep). Arreglo: re-ejecutar el
 notebook 05 y calcular el naive de la celda 17 sobre el mismo `test`.
@@ -973,7 +973,7 @@ notebook 05 y calcular el naive de la celda 17 sobre el mismo `test`.
 (cierre de la subasta)? Si no, hay leakage aunque el backtest sea impecable, y además desajuste entre
 entrenamiento y servicio: en producción esa información no existe a la hora de predecir.
 
-**Hallazgos (notebook `11_auditoria_point_in_time.ipynb`):**
+**Hallazgos (notebook `12_auditoria_point_in_time.ipynb`):**
 
 1. **Previsiones ESIOS genéricas** (544, 541): se refrescan intradía. Ya retiradas el 25-sep (entrada anterior).
 2. **Meteorología del mismo día.** Las variables AEMET son *observaciones* del día D y AEMET las publica con
@@ -996,7 +996,7 @@ retrasada. `marcar_entrenable` se calcula sobre el set predictivo.
 tienen previsión en ESIOS (sin precio): son las filas "a predecir". Contrato pandera: `precio_espana` solo
 puede ser nulo **en la cola** (horas futuras), nunca en un hueco del histórico.
 
-**Reentrenamiento y un bug propio.** Ablación en el notebook 06 (cambiar una sola cosa cada vez) con la función
+**Reentrenamiento y un bug propio.** Ablación en el notebook 07 (cambiar una sola cosa cada vez) con la función
 `evaluar_set`. La variable del bucle de la ablación (`feats`) **se filtró** al resto del notebook y la v8 se
 entrenó con 96 features en vez de 97. Arreglo: renombrar la variable (`lista`) + `assert` del número de
 features antes de entrenar y registrar → **v9 @champion, 97 features**.
@@ -1114,7 +1114,7 @@ real no existe hasta ~12-oct).
 error se degrada), pero sus umbrales no se pueden calibrar con el registro real: la media de 7 días no existe
 hasta ~12-oct. Se decidió **calibrar y comparar con una simulación de producción** sobre 2025-01-01 → 2026-10-05.
 
-### Diseño (`src/monitorizacion/simulacion.py`, notebook `12_trigger_reentrenamiento.ipynb`)
+### Diseño (`src/monitorizacion/simulacion.py`, notebook `13_trigger_reentrenamiento.ipynb`)
 
 - `simular(df, politica, inicio, fin)`: recorre los días uno a uno; para cada día D pregunta a la política si
   reentrena (el primer día siempre), entrena **solo con `fecha < D`** (point-in-time), predice las 24 h de D con
@@ -1593,7 +1593,7 @@ actual): mismo principio que las rutas de `cargar_datos` → lo que viene de fue
 
 ## 2026-10-16 → 2026-10-17 — Fase 12.2: caso de negocio (batería 1 MW / 4 MWh) y tercer hueco
 
-**Qué se ha hecho:** `notebooks/14_caso_de_negocio.ipynb` traduce el error del modelo a euros con un cliente tipo y
+**Qué se ha hecho:** `notebooks/15_caso_de_negocio.ipynb` traduce el error del modelo a euros con un cliente tipo y
 guarda las tablas en `reports/caso_negocio_*.csv` (sensibilidad, riesgo de cola, simulación vs producción, resumen).
 
 ### Cliente tipo y supuestos
@@ -1649,7 +1649,7 @@ guarda las tablas en `reports/caso_negocio_*.csv` (sensibilidad, riesgo de cola,
 - Una **cifra en € con su supuesto** ("1 MW, precio-aceptante, sin costes") vale más que una cifra grande sin contexto.
 - Contrastar contra literatura externa evita venderse por encima de lo que el modelo es.
 
-### Pendiente para la limpieza del notebook 14
+### Pendiente para la limpieza del notebook 15
 
 - `display(riesgo_cola)` duplicado en dos celdas → dejar uno.
 - Renombrar la clave `reduccion_perdida_pct` → `reduccion_perdida` (guarda una fracción, no un porcentaje).
@@ -1758,3 +1758,112 @@ guarda las tablas en `reports/caso_negocio_*.csv` (sensibilidad, riesgo de cola,
 
 - Nube (flows diarios en GitHub Actions + repo de datos), dependencias separadas, sMAPE con precio 0 + test,
   `.env.example`, limpieza de ficheros sueltos, rehacer SHAP sobre la v12, subir `model_champion/` (v12).
+- **Opcional (después de la nube):** automatizar el data drift. Hoy `drift.py` no lo llama ningún flow: solo genera
+  `reports/data_drift.html` a mano (notebook 11). Propuesta: ejecutarlo en el flow del lunes y avisar por Telegram si
+  más de un X % de las features muestran drift (señal temprana, antes de que suba el error). Si no da tiempo: trabajo
+  futuro, y decirlo así en la memoria (la vigilancia automática actual es la alarma de degradación de la tarde).
+
+---
+
+## 2026-10-23 — Reunión con el tutor, renumeración de notebooks y modelos simples
+
+**Resultado de la reunión (20-oct).** El proyecto está muy bien. Lo que más le gustó: la imputación de la capa 2
+con estación **donante elegida por correlación** ("una decisión que tomaría una empresa"). Única petición: añadir
+**dos modelos más simples** (regresión lineal y árbol de decisión) para comparar. Con eso el alcance es suficiente;
+las mejoras pendientes (nube, puerta reforzada, gating, drift automático, calibración de intervalos…) van a la
+memoria como **limitaciones y trabajo futuro**.
+
+**Renumeración de notebooks** (para que cuenten la historia de menos a más complejo):
+
+| Antes | Ahora |
+|---|---|
+| — | `06_modelos_simples` (nuevo) |
+| 06_xgboost | `07_xgboost` |
+| 07_intervalos | `08_intervalos` |
+| 08_lmst / 08_lstm_walkforward | `09_lstm` + `09b_lstm_walkforward` |
+| 09_interpretabilidad | `10_interpretabilidad` |
+| 10_monitorizacion | `11_monitorizacion` |
+| 11_auditoria_point_in_time | `12_auditoria_point_in_time` |
+| 12_trigger_reentrenamiento | `13_trigger_reentrenamiento` |
+| 13_dashboard | `14_dashboard` |
+| 14_caso_de_negocio | `15_caso_de_negocio` |
+
+Las referencias "notebook NN" de este diario se han actualizado a la numeración nueva (23-oct). Pendiente: la guía del
+proyecto, el README y la memoria.
+
+**Modelos simples (`06_modelos_simples`), en curso.** Todos los modelos se recalculan **en el mismo notebook, con el
+mismo `df` (46 meses, 32.951 filas, 97 features) y el mismo walk-forward** (12 meses iniciales, 34 evaluados), para
+compararlos en igualdad de condiciones. No se comparan con las cifras de septiembre (16,49 XGB / 18,61 naive), que
+tenían un mes menos.
+
+- Naive D-1 → **MAE 19,32 ± 5,96** (más alto que el 18,61 de septiembre: los meses nuevos, jul–oct 2026, son los más
+  difíciles).
+- Pendiente: regresión lineal, árbol de decisión (varias `max_depth`, elegida en walk-forward), XGBoost recalculado y
+  tabla comparativa (media, desviación y meses en que cada modelo gana al naive).
+
+**La LSTM no se recalcula** (se entrenó en Colab, los pesos no están en local y repetirla son horas con GPU). En la
+tabla va aparte con su cifra de septiembre: **16,59 ± 7,96**, cuando XGBoost daba 15,70 ± 5,29. Matiz honesto: aquel
+15,70 aún tenía leakage (previsiones genéricas y meteo del mismo día) y la LSTM ya usaba solo D+1, así que la
+comparación de entonces favorecía a XGBoost. Repetirla en igualdad de condiciones → trabajo futuro (junto al gating).
+
+---
+
+## 2026-10-24 → 2026-10-26 — Resultados de los modelos simples, dos huecos más y fin de la congelación
+
+### Modelos simples (`06_modelos_simples`): resultado
+
+Todos sobre el mismo `df` (46 meses, 97 features), el mismo walk-forward (34 meses evaluados) y la misma métrica.
+Cifras definitivas, reejecutado el 26-oct (33.024 filas). Respecto al 23-oct (32.951 filas) solo se mueven unas
+décimas; el orden y los meses ganados no cambian.
+
+| Modelo | MAE (€/MWh) | Desviación | Meses que gana al naive (de 34) | vs naive |
+|---|---|---|---|---|
+| **XGBoost** (receta de producción) | **17,21** | 4,78 | **27** | **−11,2 %** |
+| Regresión lineal | 18,29 | **3,62** | 26 | −5,6 % |
+| Naive D-1 | 19,38 | 6,15 | — | — |
+| Árbol de decisión (max_depth = 6) | 20,03 | 5,21 | 23 | +3,4 % |
+
+- **Árbol:** búsqueda en rejilla de `max_depth` ∈ {4, 6, 8, 10, 12} → forma de U (21,21 · 20,03 · 20,17 · 20,84 ·
+  22,01): infraajuste con 4, sobreajuste con 12. Gana al naive en la mayoría de meses pero pierde por mucho en los
+  cambios de régimen: solo predice unos pocos valores (≤ 64 hojas) y **no extrapola** por encima de lo visto.
+- **Lineal:** mejora al naive y es la más estable, pero no capta las no linealidades (ceros solares, picos).
+- **XGBoost:** el mejor; la complejidad está justificada pero por un margen **moderado** frente a la lineal
+  (1,08 €/MWh, ≈ 6 %). Su coste aquí es bajo (minutos en CPU, interpretable con SHAP).
+- **Rigor:** la profundidad del árbol se eligió con los mismos meses con que se mide (ligeramente optimista); la LSTM
+  no se recalcula (16,59 ± 7,96 de septiembre, otro periodo). Trabajo futuro: comparar también en **regret**.
+- Los hiperparámetros de XGBoost no se trasladan al árbol: XGBoost usa 400 árboles poco profundos que se corrigen;
+  un árbol solo necesita más profundidad. Optuna descartado: el objetivo es un punto de comparación simple, y XGBoost
+  tampoco se afinó (hiperparámetros fijos).
+- Tabla guardada en `reports/comparacion_modelos.csv`.
+
+### Huecos 5 y 6: portátil en reposo (predicciones del 25 y 26-oct)
+
+- **24-oct, 05:59:** Windows recuperó una ejecución pendiente al despertar el portátil. A esa hora no estaba publicada
+  la eólica D+1 → `seleccionar_filas_d1` se negó a predecir (25 filas = domingo del cambio de hora). Comportamiento
+  correcto; nada guardado. A las 11:15 el portátil estaba otra vez en reposo.
+- **25-oct:** el portátil dormía a las 11:15; Windows lanzó la tarea a las 14:00 y la puerta de las 11:50 la rechazó
+  (⚠️ subasta cerrada). Correcto también: una predicción a las 14:00 no sirve para pujar.
+- **Arreglo:** en las tres tareas del Programador → Condiciones → "Activar el equipo para ejecutar esta tarea" y quitar
+  "solo con corriente alterna". Solo cubre el reposo, no el portátil apagado.
+- **Mejora anotada:** puerta de **inicio** (no arrancar antes de ~10:55): la puerta actual solo impide predecir tarde.
+- Recuento: 6 huecos (4 por el portátil, 1 por AEMET, 1 inicial). Es el argumento principal de la limitación del
+  despliegue local.
+
+### 26-oct — Reentreno de invierno: v13 promocionada
+
+Primer reentreno tras el cambio de hora: lunes 10:00 (hora local, la tarea de Windows no se ve afectada) →
+**v13 promocionada a @champion** y exportada. `model_champion/` pendiente de commit.
+
+### Decisión: la nube no se hace antes de la entrega
+
+Tras la congelación (25-oct) y con el alcance cerrado por el tutor, la nube pasa a trabajo futuro: depurar Actions
+lleva varios días, el despliegue nuevo tendría muy pocos días de evidencia y migrar implica desactivar las tareas que
+funcionan en la semana de entrega. Queda documentado el **diseño completo**: repo privado de datos (`raw/`,
+`interim/tabla_*`, `monitoring/`), secretos en GitHub, dos `cron` UTC + comprobación de hora local por el cambio de
+hora, convivencia con el portátil y reentreno semanal en local (opción B).
+
+### Plan hasta la entrega (1-nov)
+
+Hoy: cerrar el notebook 06 y commits (renumeración de notebooks, v13, diario). Martes–miércoles: README y memoria.
+Jueves–viernes: repaso, limpieza ligera y ensayo.
+
