@@ -42,7 +42,12 @@ def tarea_features():
 def pipeline_diario():
     ingesta_omie()
     ingesta_esios()
-    ingesta_aemet()
+    # AEMET no es crítica: si su API falla, se sigue con los datos que ya hay
+    # y la imputación cubre los días que falten (degradación controlada).
+    try:
+        ingesta_aemet()
+    except Exception as e:
+        avisar(f"⚠️ AEMET no responde, se sigue sin actualizarla (se imputa): {e}")
     tarea_cobertura()
     tarea_concat()
     tarea_etl()
