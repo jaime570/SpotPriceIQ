@@ -1,12 +1,12 @@
 {
   "model_name": "spotprice-xgboost",
   "alias": "champion",
-  "version": 13,
-  "run_id": "18845e6935284f81976aabfa94112e94",
-  "mae_val": 33.67615531910819,
-  "mae_naive_val": 49.32749307479224,
-  "validacion_desde": "2026-10-12",
-  "entrenado_hasta": "2026-10-26",
+  "version": 14,
+  "run_id": "c4c98c1c497f4cd7a4c69a4fd9d42633",
+  "mae_val": 41.158905810702215,
+  "mae_naive_val": 49.15187673130194,
+  "validacion_desde": "2026-10-19",
+  "entrenado_hasta": "2026-11-02",
   "features": [
     "eolica_prevista_d1",
     "tmed_alcazar_de_san_juan_lag3d",
