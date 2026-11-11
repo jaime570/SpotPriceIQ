@@ -57,3 +57,6 @@ logs/
 # --- Tests: datos de cobertura (pytest-cov; se regeneran en cada ejecución) ---
 .coverage
 htmlcov/
+# --- Contexto para Claude Code (local, no se versiona) ---
+CLAUDE.md
+docs/decisiones.md
