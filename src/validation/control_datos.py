@@ -142,13 +142,25 @@ def validar_warehouse(df):
 ROOT = Path(__file__).resolve().parents[2]
 INTERIM = ROOT / "data" / "interim"
 
-# bloquea = si la fuente está desactualizada, ¿se para el flujo?
+# Antigüedad = hoy − fecha del dato más reciente, en días.
+# dias_frescura = antigüedad máxima permitida; por encima, fallo (si bloquea) o aviso.
+# bloquea = si la fuente supera dias_frescura, ¿se para el flujo?
+# dias_aviso (opcional) = por encima de esta antigüedad, y hasta dias_frescura, se avisa
+#   aunque la fuente bloquee: está desactualizada pero todavía se puede usar.
+# si_falta = qué hace el pipeline cuando la fuente está desactualizada (texto del aviso).
+#
 # AEMET no bloquea: la meteo pesa poco en el modelo (SHAP), entra retrasada
 # 3 días y, si falta, la cubren las capas de imputación. Solo se avisa.
+# MIBGAS: hoy hace falta el gas con entrega hoy (es el gas_d1 de mañana), así que
+# antigüedad 0 = OK; 1–3 días = aviso y se usa el último precio; > 3 = bloquea.
+# Con una pendiente luz–gas de 1,4–2, un gas desfasado mueve toda la curva.
 COBERTURA = {
-    "tabla_OMIE":  {"min_filas": 40000, "col_fecha": None,           "dias_frescura": 3, "bloquea": True},
-    "tabla_ESIOS": {"min_filas": 25000, "col_fecha": "datetime_utc", "dias_frescura": 3, "bloquea": True},
-    "tabla_AEMET": {"min_filas": 15000, "col_fecha": "fecha",        "dias_frescura": 5, "bloquea": False},
+    "tabla_OMIE":   {"min_filas": 40000, "col_fecha": None,            "dias_frescura": 3, "bloquea": True},
+    "tabla_ESIOS":  {"min_filas": 25000, "col_fecha": "datetime_utc",  "dias_frescura": 3, "bloquea": True},
+    "tabla_AEMET":  {"min_filas": 15000, "col_fecha": "fecha",         "dias_frescura": 5, "bloquea": False,
+                     "si_falta": "se sigue con imputación"},
+    "tabla_MIBGAS": {"min_filas": 1400,  "col_fecha": "fecha_entrega", "dias_frescura": 3, "bloquea": True,
+                     "dias_aviso": 0, "si_falta": "se usa el último precio disponible"},
 }
 
 
@@ -163,23 +175,27 @@ def _fecha_maxima(df, col_fecha):
     return fechas.max().normalize()
 
 
-def validar_cobertura() -> tuple[dict, list]:
+def validar_cobertura(hoy: pd.Timestamp | None = None,
+                      interim: Path = INTERIM) -> tuple[dict, list]:
     """Contrato de cobertura de las fuentes crudas (interim).
 
     Por cada fuente comprueba: (1) al menos `min_filas` filas — detecta un
     colapso tipo ESIOS-97 (bloquea siempre); (2) que el dato más reciente no sea
     más viejo que `dias_frescura` días — detecta una fuente que dejó de
     actualizarse. Si la fuente tiene `bloquea=False`, (2) solo genera un aviso.
+    (3) Si tiene `dias_aviso`, una antigüedad entre `dias_aviso` (exclusive) y
+    `dias_frescura` (inclusive) genera un aviso aunque la fuente bloquee.
 
+    `hoy` e `interim` se pueden pasar para los tests; por defecto, hoy y data/interim.
     Si hay fallos bloqueantes, lanza ValueError con el informe completo.
     Si no, devuelve ({fuente: (n_filas, fecha_max)}, [avisos]).
     """
-    hoy = pd.Timestamp(date.today())
+    hoy = pd.Timestamp(date.today()) if hoy is None else pd.Timestamp(hoy).normalize()
     fallos = []
     avisos = []
     resumen = {}
     for archivo, reglas in COBERTURA.items():
-        ruta = INTERIM / archivo
+        ruta = interim / archivo
         if not ruta.exists():
             fallos.append(f"{archivo}: no existe el fichero ({ruta})")
             continue
@@ -193,13 +209,17 @@ def validar_cobertura() -> tuple[dict, list]:
             fallos.append(f"{archivo}: {n} filas < mínimo {reglas['min_filas']}")
 
         antiguedad = (hoy - fecha_max).days
+        si_falta = f", {reglas['si_falta']}" if "si_falta" in reglas else ""
         if antiguedad > reglas["dias_frescura"]:
             mensaje = (f"{archivo}: dato más reciente {fecha_max.date()} "
                        f"({antiguedad} días > {reglas['dias_frescura']} permitidos)")
             if reglas["bloquea"]:
                 fallos.append(mensaje)
             else:
-                avisos.append(mensaje)
+                avisos.append(mensaje + si_falta)
+        elif "dias_aviso" in reglas and antiguedad > reglas["dias_aviso"]:
+            avisos.append(f"{archivo}: dato más reciente {fecha_max.date()} "
+                          f"({antiguedad} días de antigüedad){si_falta}")
 
     if fallos:
         raise ValueError("Contrato de cobertura incumplido:\n- " + "\n- ".join(fallos))

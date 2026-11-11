@@ -2,6 +2,7 @@ from prefect import flow, task
 
 from src.ingesta.aemet import ingesta_aemet
 from src.ingesta.esios import ingesta_esios
+from src.ingesta.mibgas import ingesta_mibgas
 from src.ingesta.omie import ingesta_omie
 from src.notificaciones.telegram import avisar
 from src.procesamiento.concatenacion import construir_tabla_maestra
@@ -13,11 +14,12 @@ from src.validation.control_datos import validar_cobertura
 @task(retries=0)
 def tarea_cobertura():
     """Puerta de entrada: valida cobertura de las fuentes crudas.
-    Si una fuente crítica falla, para el flow. Si una no crítica (AEMET) está
-    desactualizada, avisa por Telegram y sigue (se imputa)."""
+    Si una fuente falla de forma bloqueante, para el flow. Si está desactualizada
+    pero todavía se puede usar (AEMET: se imputa; MIBGAS de 1 a 3 días: último
+    precio), avisa por Telegram y sigue. El aviso ya dice qué se hace."""
     resumen, avisos = validar_cobertura()
     for aviso in avisos:
-        avisar(f"⚠️ Fuente no crítica desactualizada, se sigue con imputación: {aviso}")
+        avisar(f"⚠️ Fuente desactualizada: {aviso}")
     return resumen
 
 @task
@@ -48,6 +50,12 @@ def pipeline_diario():
         ingesta_aemet()
     except Exception as e:
         avisar(f"⚠️ AEMET no responde, se sigue sin actualizarla (se imputa): {e}")
+    # MIBGAS tampoco para el pipeline si su web falla: se sigue con el último precio
+    # guardado y es la cobertura la que decide (aviso de 1 a 3 días, bloqueo si más).
+    try:
+        ingesta_mibgas()
+    except Exception as e:
+        avisar(f"⚠️ MIBGAS no responde, se sigue con el último precio guardado: {e}")
     tarea_cobertura()
     tarea_concat()
     tarea_etl()

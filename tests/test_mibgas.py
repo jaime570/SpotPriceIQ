@@ -1,6 +1,8 @@
 import pandas as pd
+import pytest
 
 from src.ingesta.mibgas import parsear_texto, unir
+from src.validation import control_datos
 
 # Mismo formato que el CSV real: línea de emisión, cabecera con la unidad en el precio,
 # ';' al final de cada línea y otros productos mezclados con GDAES_D+1
@@ -34,3 +36,33 @@ def test_unir_quita_duplicados_y_gana_la_nueva():
     assert len(out) == 3
     assert out["fecha_entrega"].is_unique
     assert out.set_index("fecha_entrega").loc["2026-11-02", "precio_gas"] == 81.5
+
+
+# --- Cobertura: caducidad del gas (0 días OK, 1–3 aviso, > 3 bloquea) ---
+
+@pytest.fixture
+def interim_mibgas(tmp_path, monkeypatch):
+    """data/interim temporal con tabla_MIBGAS hasta el 10-11-2026 y solo la regla de MIBGAS."""
+    fechas = pd.date_range(end="2026-11-10", periods=1500, freq="D")
+    pd.DataFrame({"fecha_entrega": fechas.strftime("%Y-%m-%d"), "precio_gas": 80.0}).to_csv(
+        tmp_path / "tabla_MIBGAS", index=False)
+    monkeypatch.setattr(control_datos, "COBERTURA",
+                        {"tabla_MIBGAS": control_datos.COBERTURA["tabla_MIBGAS"]})
+    return tmp_path
+
+
+def test_cobertura_mibgas_al_dia_sin_avisos(interim_mibgas):
+    _, avisos = control_datos.validar_cobertura(hoy="2026-11-10", interim=interim_mibgas)
+    assert avisos == []
+
+
+@pytest.mark.parametrize("hoy", ["2026-11-11", "2026-11-13"])
+def test_cobertura_mibgas_1_a_3_dias_avisa(interim_mibgas, hoy):
+    _, avisos = control_datos.validar_cobertura(hoy=hoy, interim=interim_mibgas)
+    assert len(avisos) == 1
+    assert "último precio" in avisos[0]
+
+
+def test_cobertura_mibgas_mas_de_3_dias_bloquea(interim_mibgas):
+    with pytest.raises(ValueError, match="tabla_MIBGAS"):
+        control_datos.validar_cobertura(hoy="2026-11-14", interim=interim_mibgas)
