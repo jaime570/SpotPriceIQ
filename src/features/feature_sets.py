@@ -14,6 +14,9 @@ _METEO_PREFIXES = ("tmed_", "tmax_", "velmedia_", "racha_", "prec_", "sol_")
 # "Solo previsiones verificadas como estables tras la subasta (fotos antes/después, sep-2026). Demanda 460 y solares 542/543 se revisan después → leakage. Ver diario."
 _PREVISTAS_D1 = ("eolica_prevista_d1",)  
 
+# Gas MIBGAS con entrega T−1 para el día T (auditoría point-in-time: notebook 16).
+_GAS = ("gas_d1",)
+
 TARGET = "precio_espana"
 
 
@@ -51,8 +54,11 @@ def get_feature_sets(df):
     calendario = df.columns[df.columns.str.endswith(("_sin", "_cos"))].tolist()
     if "festivo" in df.columns:
         calendario.append("festivo")
+    # Gas: solo en el predictivo y al final, para que las 97 features previas
+    # conserven su orden (el modelo guarda la lista exacta en model_meta.json)
+    gas = [c for c in _GAS if c in df.columns]
 
     return {
-        "predictivo": previstas + meteo_lag + lags + calendario,
+        "predictivo": previstas + meteo_lag + lags + calendario + gas,
         "explicativo": reales + meteo + lags + calendario,
     }

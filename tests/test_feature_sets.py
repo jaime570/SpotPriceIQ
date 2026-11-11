@@ -46,3 +46,11 @@ def test_predictivo_usa_meteo_retrasada():
 
     assert "tmed_madrid_aeropuerto_lag3d" in feats and "prec_sevilla_lag3d" in feats
     assert "tmed_madrid_aeropuerto" not in feats and "prec_sevilla" not in feats
+
+
+def test_gas_d1_al_final_del_predictivo_y_fuera_del_explicativo():
+    """gas_d1 entra al final para no cambiar el orden de las 97 features previas."""
+    df = _df_columnas(["precio_espana", "eolica_prevista_d1", "precio_lag_24", "hora_sin", "gas_d1"])
+    sets = get_feature_sets(df)
+    assert sets["predictivo"][-1] == "gas_d1"
+    assert "gas_d1" not in sets["explicativo"]

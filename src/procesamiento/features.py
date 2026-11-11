@@ -9,6 +9,7 @@ from src.features.feature_sets import get_feature_sets, get_meteo
 PATH = Path(__file__).resolve().parents[2]
 PROCESSED = PATH / "data" / "processed"
 TABLA_MAESTRA_PROCESADA = PROCESSED / "tabla_maestra_procesada.parquet"
+TABLA_MIBGAS = PATH / "data" / "interim" / "tabla_MIBGAS"
 
 def imputar_capa_1 (df_maestra_procesada, columnas=None):
     """Imputacion de microhuecos < 6 horas en capa 1 (interpolacion lineal temporal)"""
@@ -112,6 +113,37 @@ def añadir_lags_meteo(df,dias=3):
     df = df.merge(diario, on="fecha", how="left")
     return df
 
+def gas_d1_diario(tabla_gas, hasta):
+    """Serie diaria de gas_d1 indexada por fecha objetivo (día de Madrid, naive).
+
+    Point-in-time: gas_d1 del día T = precio con entrega T−1, publicado al cerrar
+    la sesión de T−2, antes de la subasta de las 12:00 de T−1.
+
+    El calendario va desde la primera fecha objetivo hasta `hasta` (el último día
+    de la tabla horaria, es decir, el día que se predice), NO hasta el último dato
+    publicado: así el relleno hacia delante también cubre los días sin publicar.
+    Los huecos del histórico se rellenan igual, para que entrenamiento y predicción
+    traten el gas de la misma forma. La caducidad (más de 3 días sin dato nuevo
+    bloquea) la controla la cobertura, no esta función.
+    """
+    gas = tabla_gas.set_index("fecha_entrega")["precio_gas"].sort_index()
+    gas.index = gas.index + pd.Timedelta(days=1)      # fecha de entrega -> fecha objetivo
+    calendario = pd.date_range(gas.index.min(), pd.Timestamp(hasta), freq="D", name="fecha")
+    # reindex descarta lo posterior a `hasta` (p. ej. la entrega de mañana, publicada por la tarde)
+    return gas.reindex(calendario).ffill().rename("gas_d1")
+
+
+def añadir_gas(df, tabla_gas):
+    """Añade gas_d1 a la tabla horaria uniendo por `fecha` (día de Madrid, regla 4),
+    no por la fecha UTC: las 24 horas de un día de mercado comparten el mismo gas."""
+    n_antes = len(df)
+    serie = gas_d1_diario(tabla_gas, hasta=df["fecha"].max())
+    df = df.merge(serie.reset_index(), on="fecha", how="left")
+    # how="left" con una fila por día: no se puede ganar ni perder ninguna hora
+    assert len(df) == n_antes, f"añadir_gas: {n_antes} filas antes y {len(df)} después"
+    return df
+
+
 def marcar_entrenable(df):
 
     """Marca las filas entrenables y completas de features"""
@@ -138,7 +170,8 @@ def ejecutar_features():
     df = añadir_calendario(df)
     df = añadir_lags_precio(df)
     df= añadir_lags_meteo(df)
-    df = marcar_entrenable(df)                                 # ultimo: despues de los lags
+    df = añadir_gas(df, pd.read_csv(TABLA_MIBGAS, parse_dates=["fecha_entrega"]))
+    df = marcar_entrenable(df)                                # ultimo: despues de los lags
 
     df.to_parquet(PROCESSED / "tabla_features.parquet", index=False)
     return df

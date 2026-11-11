@@ -56,6 +56,13 @@ def test_cobertura_mibgas_al_dia_sin_avisos(interim_mibgas):
     assert avisos == []
 
 
+def test_cobertura_mibgas_antiguedad_negativa_es_ok(interim_mibgas):
+    # En la evaluación de la tarde ya puede estar publicada la entrega de mañana
+    # (antigüedad −1): no es un dato viejo, no debe avisar ni bloquear
+    _, avisos = control_datos.validar_cobertura(hoy="2026-11-09", interim=interim_mibgas)
+    assert avisos == []
+
+
 @pytest.mark.parametrize("hoy", ["2026-11-11", "2026-11-13"])
 def test_cobertura_mibgas_1_a_3_dias_avisa(interim_mibgas, hoy):
     _, avisos = control_datos.validar_cobertura(hoy=hoy, interim=interim_mibgas)
