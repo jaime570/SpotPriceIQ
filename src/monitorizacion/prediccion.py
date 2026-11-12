@@ -30,7 +30,8 @@ def seleccionar_filas_d1(df):
     return a_predecir
 
 def predecir(a_predecir):
-    """Predice las filas de D+1 con el modelo de model_champion/ (el mismo que sirve la API). Devuelve (predicciones, meta)."""
+    """Predice las filas de D+1 con el modelo de model_champion/ (el mismo que sirve la API).
+    Devuelve (predicciones, meta, componentes); componentes es None si el modelo no es el ensemble."""
     modelo = mlflow.pyfunc.load_model(str(ROOT / "model_champion"))
     meta = json.loads((ROOT / "model_champion" / "model_meta.json").read_text())
 
@@ -39,14 +40,29 @@ def predecir(a_predecir):
 
     X = a_predecir[meta["features"]]
     predicciones = modelo.predict(X)
-    return predicciones, meta
+    return predicciones, meta, predecir_componentes(modelo, X)
 
-def construir_registro(a_predecir, predicciones, meta):
-    """Una fila por hora predicha: predicción, naive del mismo momento y trazabilidad del modelo."""
+def predecir_componentes(modelo, X):
+    """Componentes A y B del ensemble (DataFrame componente_a / componente_b), o None
+    si el modelo cargado no es el ensemble (p. ej. un XGBoost tras volver a @anterior):
+    la predicción no depende de esto, solo el registro de las componentes."""
+    try:
+        interno = modelo.unwrap_python_model()
+    except Exception:
+        return None
+    if not hasattr(interno, "predecir_componentes"):
+        return None
+    return interno.predecir_componentes(X)
+
+def construir_registro(a_predecir, predicciones, meta, componentes=None):
+    """Una fila por hora predicha: predicción, componentes A y B del ensemble (vacías si
+    el modelo no es el ensemble), naive del mismo momento y trazabilidad del modelo."""
     registro = (a_predecir[["datetime_utc", "fecha", "precio_lag_24"]]
                 .rename(columns={"fecha": "fecha_objetivo", "precio_lag_24": "naive_d1"})
                 .reset_index(drop=True))
     registro["prediccion"] = predicciones
+    for col in ("componente_a", "componente_b"):
+        registro[col] = componentes[col].to_numpy() if componentes is not None else float("nan")
     registro["modelo_version"] = meta["version"]
     registro["run_id"] = meta["run_id"]
     registro["momento_prediccion"] = pd.Timestamp.now(tz="UTC")
@@ -79,8 +95,8 @@ def predecir_d1():
     if a_predecir.empty:
         return None
 
-    predicciones, meta = predecir(a_predecir)
-    registro = construir_registro(a_predecir, predicciones, meta)
+    predicciones, meta, componentes = predecir(a_predecir)
+    registro = construir_registro(a_predecir, predicciones, meta, componentes)
     ruta = guardar_registro(registro)
 
     perfil = registro.assign(
