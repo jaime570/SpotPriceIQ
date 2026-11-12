@@ -12,6 +12,13 @@ import pandas as pd
 from src.evaluacion.metricas import evaluar, pinball_loss
 
 
+def meses_madrid(datetime_utc: pd.Series) -> pd.Series:
+    """Mes de mercado de cada hora, en fecha de Madrid (regla 4), para la columna
+    `meses` del walk-forward. Cortar por mes UTC mueve el MAE ~0,2 (decisión 2026-11-12):
+    p. ej. las 23:00 UTC del 31 de octubre ya son 1 de noviembre en Madrid."""
+    return datetime_utc.dt.tz_convert("Europe/Madrid").dt.tz_localize(None).dt.to_period("M")
+
+
 def walk_forward(df, target, predecir, col_mes="meses", inicio=12, ventana=None):
     """Walk-forward mensual de origen móvil (punto).
 
